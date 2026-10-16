@@ -1,5 +1,9 @@
 # Terminal Grid
 
+[![Open VSX version](https://img.shields.io/open-vsx/v/vdzeer/terminal-grid)](https://open-vsx.org/extension/vdzeer/terminal-grid)
+[![Open VSX downloads](https://img.shields.io/open-vsx/dt/vdzeer/terminal-grid)](https://open-vsx.org/extension/vdzeer/terminal-grid)
+[![License: MIT](https://img.shields.io/github/license/vdzeer/terminal-grid)](https://github.com/vdzeer/terminal-grid/blob/main/LICENSE)
+
 An editor extension that shows every terminal of the window as a grid in its
 own tab of the bottom panel, next to "Terminal". Tiles are rearranged with drag
 and drop, split, resized and maximized like editor groups. It runs in VS Code
