@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- The grid no longer gives way to the Terminal tab when a tool shows the
+  active terminal right after opening or closing an editor tab, as AI coding
+  agents do for every proposed edit and when it is accepted, rejected or closed.
+  The grid takes the panel back and focuses that terminal's tile.
+- In grid mode a diff opened by a tool only un-maximizes the panel instead of
+  closing it, so the diff and the grid are on screen together.
+
 ## 0.3.0
 
 First public release, for VS Code and the editors that install from Open VSX

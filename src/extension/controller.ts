@@ -7,6 +7,7 @@ import { remove, sanitize, type LayoutNode, type Placement } from '../shared/lay
 import type { HostMessage, ViewMessage, ViewSettings } from '../shared/protocol';
 import { buildEnv, defaultShellArgs, resolveShell } from './env';
 import { FocusLayout } from './focusLayout';
+import { RECLAIM_WINDOW_MS, noReclaim, shouldReclaim, tabChangeCounts, type ReclaimState } from './reclaim';
 import { renderHtml, renderPlaceholder } from './html';
 import type { NodePty } from './nodePty';
 import { Mirrors } from './mirrors';
@@ -25,6 +26,15 @@ const MIRROR_NOTICE_KEY = 'terminalGrid.mirrorNoticeShown';
 
 /** Puts a restored screen back into a sane state before the new shell starts. */
 const RESET_MODES = '\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m';
+
+/** A diff in front: a proposed edit, answered in the terminal, not the user leaving the grid for a file. */
+function isBoardTab(tab: vscode.Tab): boolean {
+  return tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(VIEW_TYPE);
+}
+
+function activeTabIsDiff(): boolean {
+  return vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTextDiff;
+}
 
 /** Where the board can be shown: the bottom panel view, or an editor tab. */
 export type HostKind = 'panel' | 'editor';
@@ -52,6 +62,10 @@ export class BoardController implements vscode.Disposable {
   private readonly mirrors: Mirrors;
   private readonly focusLayout: FocusLayout;
   private readonly status: vscode.StatusBarItem;
+  /** Tab changes that may push the grid out of the panel (see reclaim.ts). */
+  private reclaim: ReclaimState = noReclaim();
+  /** The last tab change, for the integration run's diagnostics. */
+  private lastTabEvent = '';
   private readonly t: Translate;
   private readonly subscriptions: vscode.Disposable[] = [];
 
@@ -95,7 +109,7 @@ export class BoardController implements vscode.Disposable {
       this.focusLayout,
       // Opening a file while the grid fills the window brings the editor back.
       vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (editor) void this.focusLayout.leaveForEditor();
+        if (editor) void this.focusLayout.leaveForEditor({ keepGrid: activeTabIsDiff() });
       }),
       // Closing a twin in the Terminal tab (or through the API) ends the shell and the tile.
       vscode.window.onDidCloseTerminal((terminal) => {
@@ -104,7 +118,18 @@ export class BoardController implements vscode.Disposable {
         for (const twin of this.twins.values()) if (twin === options.pty) twin.close();
       }),
       vscode.window.tabGroups.onDidChangeTabs((event) => {
-        if (event.opened.some((tab) => tab.isActive)) void this.focusLayout.leaveForEditor();
+        const now = Date.now();
+        const visible = this.host === 'panel' && this.panelView?.visible === true;
+        // The board's own editor tab coming or going is the extension's doing, not a tool's.
+        const others = [...event.opened, ...event.closed].filter((tab) => !isBoardTab(tab));
+        if (others.length > 0 && this.host === 'panel' && tabChangeCounts(visible, this.reclaim.hiddenAt, now)) {
+          this.reclaim = { ...this.reclaim, tabChangeAt: now, reclaims: 0 };
+          // The grid may already be gone: the terminal was shown before this event arrived.
+          if (!visible) this.reclaimPanel();
+        }
+        this.lastTabEvent = `+${event.opened.map((t) => t.label).join('|')} -${event.closed.map((t) => t.label).join('|')}`;
+        const opened = event.opened.find((tab) => tab.isActive);
+        if (opened) void this.focusLayout.leaveForEditor({ keepGrid: opened.input instanceof vscode.TabInputTextDiff });
       }),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
@@ -234,7 +259,11 @@ export class BoardController implements vscode.Disposable {
       view.onDidChangeVisibility(() => {
         this.applyAllSizes();
         if (view.visible) void this.focusLayout.enter();
-        else void this.focusLayout.onGridHidden();
+        else {
+          void this.focusLayout.onGridHidden();
+          this.reclaim.hiddenAt = Date.now();
+          this.reclaimPanel();
+        }
       }),
     );
     view.onDidDispose(() => {
@@ -433,6 +462,30 @@ export class BoardController implements vscode.Disposable {
     this.updateStatus();
     this.saveSoon();
     return new vscode.TerminalProfile({ name: titleOf(session), pty: twin, iconPath: new vscode.ThemeIcon('layout'), isTransient: true });
+  }
+
+  /** Takes the panel back when a tool showed a grid terminal in the Terminal tab (see reclaim.ts). */
+  private reclaimPanel(): void {
+    if (this.host !== 'panel') return;
+    const active = vscode.window.activeTerminal;
+    const id = active ? this.sessionIdOf(active) : undefined;
+    const state = { ...this.reclaim, ownHideAt: this.focusLayout.closedPanelAt };
+    if (!shouldReclaim(state, this.panelView?.visible === true, id !== undefined)) return;
+    this.reclaim.reclaims += 1;
+    this.focusLayout.holdLayout(RECLAIM_WINDOW_MS);
+    void vscode.commands.executeCommand(`${PANEL_VIEW_ID}.focus`).then(() => {
+      if (id && this.ready) this.post({ type: 'focus', id });
+    });
+  }
+
+  /** The grid tile that shows this terminal: a grid shell's twin, or a mirror that is not hidden. */
+  private sessionIdOf(terminal: vscode.Terminal): string | undefined {
+    const options = terminal.creationOptions;
+    if ('pty' in options) {
+      for (const [id, twin] of this.twins) if (twin === options.pty) return id;
+    }
+    const mirror = this.mirrors.all().find(([candidate]) => candidate === terminal)?.[1];
+    return mirror && !this.hidden.has(mirror) ? mirror : undefined;
   }
 
   private isTwin(terminal: vscode.Terminal): boolean {
@@ -758,6 +811,7 @@ export class BoardController implements vscode.Disposable {
       host: () => this.host,
       gridMode: () => this.focusLayout.isActive,
       panelVisible: () => this.panelView?.visible === true,
+      reclaimState: () => ({ ...this.reclaim, ownHideAt: this.focusLayout.closedPanelAt, active: vscode.window.activeTerminal?.name, tabs: this.lastTabEvent }),
       twinTerminals: () => vscode.window.terminals.filter((t) => this.isTwin(t)).length,
       twinTerminal: (id: string) => vscode.window.terminals.find((t) => 'pty' in t.creationOptions && t.creationOptions.pty === this.twins.get(id)),
       /** Same routing as typing in a tile. */

@@ -8,6 +8,7 @@ import { buildEnv, defaultShellArgs, hasChildProcess, processLabel, resolveShell
 import { loadNodePty, nodePtyCandidates } from '../src/extension/nodePty';
 import { PROFILE_NAME, platformKey, shouldOfferDefaultProfile } from '../src/extension/profile';
 import { readState } from '../src/extension/store';
+import { RECLAIM_LIMIT, RECLAIM_WINDOW_MS, shouldReclaim, tabChangeCounts } from '../src/extension/reclaim';
 import { dictionaries, languageFor, translator } from '../src/shared/i18n';
 import { matchShortcut } from '../src/shared/keys';
 import { findFileLinks } from '../src/shared/links';
@@ -245,5 +246,35 @@ describe('grid mode measurements', () => {
     assert.equal(sideBarWasOpen(view(900, 300), view(1200, 300)), true);
     assert.equal(sideBarWasOpen(view(900, 300), view(905, 300)), false);
     assert.equal(sideBarWasOpen(undefined, view(1200, 300)), false);
+  });
+});
+
+describe('taking the panel back after a tool showed a terminal', () => {
+  const at = 10_000;
+  const state = { tabChangeAt: at, hiddenAt: at + 50, reclaims: 0, ownHideAt: undefined };
+
+  it('takes it back when the grid is hidden right after an editor tab opened or closed, in either order', () => {
+    assert.equal(shouldReclaim(state, false, true), true);
+    assert.equal(shouldReclaim({ ...state, hiddenAt: at - 400 }, false, true), true);
+    assert.equal(shouldReclaim({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS }, false, true), true);
+  });
+
+  it('leaves it when the grid is on screen, the terminal is not in the grid, or the events are far apart', () => {
+    assert.equal(shouldReclaim(state, true, true), false);
+    assert.equal(shouldReclaim(state, false, false), false);
+    assert.equal(shouldReclaim({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS + 1 }, false, true), false);
+    assert.equal(shouldReclaim({ ...state, tabChangeAt: undefined }, false, true), false);
+  });
+
+  it('never fights a hide of its own or in a loop', () => {
+    assert.equal(shouldReclaim({ ...state, ownHideAt: at + 40 }, false, true), false);
+    assert.equal(shouldReclaim({ ...state, reclaims: RECLAIM_LIMIT }, false, true), false);
+  });
+
+  it('counts a tab change while the grid is on screen or just left it', () => {
+    assert.equal(tabChangeCounts(true, undefined, at), true);
+    assert.equal(tabChangeCounts(false, at - 200, at), true);
+    assert.equal(tabChangeCounts(false, at - RECLAIM_WINDOW_MS - 1, at), false);
+    assert.equal(tabChangeCounts(false, undefined, at), false);
   });
 });

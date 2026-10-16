@@ -135,6 +135,29 @@ async function run() {
   await until('twin input', () => api.screen(first.id).includes('TG_FROM_TAB'));
   check('typing in the Terminal tab reaches the grid shell', true);
 
+  // A tool that shows the active terminal right after opening or closing a diff
+  // (AI coding agents do) must not push the grid out of the panel; the user
+  // switching to the Terminal tab on their own still does.
+  twin.show(true);
+  await sleep(2500);
+  check('showing a twin on its own leaves the Terminal tab in front', !api.panelVisible(), JSON.stringify(api.reclaimState()));
+  await vscode.commands.executeCommand('terminalGrid.open');
+  await until('grid back for the diff check', () => api.panelVisible() && api.gridMode(), 10000);
+  const folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  const proposed = vscode.Uri.file(require('path').join(folder, 'notes-proposed.md'));
+  fs.writeFileSync(proposed.fsPath, '# notes\nchanged\n');
+  await vscode.commands.executeCommand('vscode.diff', notes, proposed, 'notes.md (proposed)');
+  vscode.window.activeTerminal?.show();
+  await sleep(2500);
+  check('a diff followed by showing the terminal keeps the grid in the panel', api.panelVisible() && !api.gridMode(), `panel ${api.panelVisible()} gridMode ${api.gridMode()} ${JSON.stringify(api.reclaimState())}`);
+  const diffTab = vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((tab) => tab.input instanceof vscode.TabInputTextDiff);
+  check('the diff stays open next to the grid', !!diffTab);
+  if (diffTab) await vscode.window.tabGroups.close(diffTab);
+  await sleep(500);
+  vscode.window.activeTerminal?.show();
+  await sleep(2500);
+  check('closing the diff and showing the terminal keeps the grid too', api.panelVisible(), JSON.stringify(api.reclaimState()));
+
   // Closing a twin in the Terminal tab closes the grid terminal too.
   const before3 = ptys(api).length;
   await vscode.commands.executeCommand('terminalGrid.newTerminal');

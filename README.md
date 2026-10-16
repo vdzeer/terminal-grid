@@ -15,9 +15,17 @@ VSCodium and Windsurf. Tested on macOS with VS Code 1.142 and Antigravity IDE
   shows how many terminals the grid holds and opens the grid.
 - **Grid mode.** While the grid is open in the panel, the panel is maximized,
   the Explorer is shown and the secondary side bar (the Agent side bar in
-  Antigravity) is closed. Opening a file brings the previous layout back.
+  Antigravity) is closed. Opening a file brings the previous layout back. A
+  diff opened by a tool (a proposed edit from an AI agent) only un-maximizes
+  the panel, so the diff and the grid are on screen together.
   Maximizing only happens when `workbench.panel.defaultAlignment` is `center`.
   Setting: `terminalGrid.focusLayout`.
+- **The grid stays in front.** Some extensions show "the terminal" right after
+  they open or close an editor tab; AI coding agents do it for every proposed
+  edit. That would switch the panel to the Terminal tab, so when it happens
+  within a moment of a tab change and the terminal is one the grid shows, the
+  grid takes the panel back and focuses that tile. Switching to the Terminal
+  tab yourself works as usual.
 - **Grid shells are also in the Terminal tab.** A shell started by the grid
   shows in both places: one process, two views. Typing in either reaches it,
   closing it in either closes both, and the shell takes the size of whichever

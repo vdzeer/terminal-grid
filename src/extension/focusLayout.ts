@@ -23,6 +23,10 @@ export class FocusLayout implements vscode.Disposable {
   private lastViewportAt = 0;
   /** Editor changes caused by the extension itself (closing its own tab) are not the user leaving. */
   private ignoreEditorChangesUntil = 0;
+  /** The grid came back on screen for a moment's work, not to fill the window (see reclaim.ts). */
+  private holdUntil = 0;
+  /** When leaving grid mode last closed the panel; that hidden grid is not to be brought back. */
+  closedPanelAt: number | undefined;
 
   constructor(
     private readonly enabled: () => boolean,
@@ -40,6 +44,11 @@ export class FocusLayout implements vscode.Disposable {
 
   ignoreEditorChanges(ms: number): void {
     this.ignoreEditorChangesUntil = Date.now() + ms;
+  }
+
+  /** The grid shows again without maximizing the panel, for this long. */
+  holdLayout(ms: number): void {
+    this.holdUntil = Date.now() + ms;
   }
 
   /** The board webview was replaced; wait for its own measurements. */
@@ -62,7 +71,7 @@ export class FocusLayout implements vscode.Disposable {
 
   /** The grid just became visible in the bottom panel. */
   async enter(): Promise<void> {
-    if (this.active || this.busy || !this.enabled() || !this.gridVisibleInPanel()) return;
+    if (this.active || this.busy || !this.enabled() || !this.gridVisibleInPanel() || Date.now() < this.holdUntil) return;
     this.busy = true;
     try {
       // The webview reports its size once it has loaded.
@@ -107,14 +116,23 @@ export class FocusLayout implements vscode.Disposable {
     return !!this.viewport && this.maximizedHeight > 0 && this.viewport.height >= this.maximizedHeight - 30;
   }
 
-  /** The user went to an editor: close the maximized grid and bring the layout back. */
-  async leaveForEditor(): Promise<void> {
+  /**
+   * The user went to an editor: close the maximized grid and bring the layout back.
+   * `keepGrid`: a diff opened by a tool (a proposed edit) is answered in the
+   * terminal, so the panel only stops being maximized and the grid stays below it.
+   */
+  async leaveForEditor(options: { keepGrid?: boolean } = {}): Promise<void> {
     if (!this.active || this.busy || Date.now() < this.ignoreEditorChangesUntil) return;
     this.setActive(false);
     // When the user restored the panel size on purpose, keep the grid next to the editor.
     if (this.stillMaximized()) {
-      // Hiding a maximized panel un-maximizes it; the editor reopens it maximized next time.
-      await vscode.commands.executeCommand('workbench.action.closePanel');
+      if (options.keepGrid) {
+        await vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel');
+      } else {
+        // Hiding a maximized panel un-maximizes it; the editor reopens it maximized next time.
+        this.closedPanelAt = Date.now();
+        await vscode.commands.executeCommand('workbench.action.closePanel');
+      }
     }
     await this.restoreSideBar();
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
