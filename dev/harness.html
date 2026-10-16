@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<!-- Browser harness for the webview: fake VS Code theme variables and a fake
+     extension that echoes input. Serve the project root and open /dev/harness.html. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Terminal Grid harness</title>
+  <link rel="stylesheet" href="../dist/xterm.css">
+  <link rel="stylesheet" href="../dist/webview.css">
+  <style>
+    html {
+      --vscode-font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      --vscode-font-size: 13px;
+      --vscode-foreground: #cccccc;
+      --vscode-descriptionForeground: #9d9d9d;
+      --vscode-editor-background: #1f1f1f;
+      --vscode-panel-background: #181818;
+      --vscode-editor-foreground: #cccccc;
+      --vscode-terminal-background: #181818;
+      --vscode-terminal-foreground: #cccccc;
+      --vscode-editorGroupHeader-tabsBackground: #181818;
+      --vscode-editorGroupHeader-tabsBorder: #2b2b2b;
+      --vscode-panel-border: #2b2b2b;
+      --vscode-focusBorder: #0078d4;
+      --vscode-button-background: #0078d4;
+      --vscode-button-foreground: #ffffff;
+      --vscode-button-hoverBackground: #026ec1;
+      --vscode-button-secondaryBackground: #313131;
+      --vscode-button-secondaryForeground: #cccccc;
+      --vscode-button-secondaryHoverBackground: #3c3c3c;
+      --vscode-badge-background: #616161;
+      --vscode-badge-foreground: #f8f8f8;
+      --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+      --vscode-editorWidget-background: #202020;
+      --vscode-editorWidget-border: #313131;
+      --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+      --vscode-list-hoverBackground: #2a2d2e;
+      --vscode-textLink-foreground: #4daafc;
+      --vscode-input-background: #313131;
+      --vscode-input-foreground: #cccccc;
+      --vscode-input-border: #3c3c3c;
+      --vscode-terminal-ansiGreen: #0dbc79;
+      --vscode-terminal-ansiBlue: #2472c8;
+      --vscode-terminal-ansiRed: #cd3131;
+      --vscode-terminal-ansiYellow: #e5e510;
+      --vscode-terminal-ansiCyan: #11a8cd;
+      --vscode-terminal-ansiMagenta: #bc3fbc;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    if (params.get('host')) document.body.dataset.host = params.get('host');
+    const send = (message) => window.postMessage(message, '*');
+    const log = [];
+    window.__log = log;
+    let counter = 0;
+    const info = (id, process = 'zsh') => ({ id, kind: 'pty', process, customTitle: '', cwd: '/Users/me/Projects/demo-' + id });
+    // A mirror of a Terminal-tab terminal: fixed 134x18, like a wide bottom panel.
+    const mirror = { id: 'm1', kind: 'mirror', process: 'node', customTitle: '', cwd: '/Users/me/Projects/api', fixedSize: { cols: 134, rows: 18 } };
+    const prompt = '\x1b[32m➜\x1b[0m \x1b[36mdemo\x1b[0m ';
+    const settings = {
+      language: params.get('lang') || 'en',
+      fontFamily: 'Menlo, monospace', fontSize: 12, lineHeight: 1.1, letterSpacing: 0,
+      cursorStyle: 'block', cursorBlink: false, scrollback: 1000, macOptionIsMeta: false,
+      minimumContrastRatio: 4.5, drawBoldTextInBrightColors: true, gpu: true, shiftEnter: '\x1b\r', platform: 'darwin',
+    };
+    window.acquireVsCodeApi = () => ({
+      postMessage(message) {
+        if (message.type !== 'input' && message.type !== 'ack') log.push(message);
+        switch (message.type) {
+          case 'ready': {
+            const ids = (params.get('tiles') || 'a,b,c').split(',').filter(Boolean);
+            setTimeout(() => {
+              send({
+                type: 'init',
+                terminals: [...ids.map((id, i) => info(id, i === 1 ? 'node' : 'zsh')), ...(params.get('mirror') === '0' ? [] : [mirror])],
+                layout: null,
+                settings,
+                snapshots: {
+                  ...Object.fromEntries(ids.map((id) => [id, { data: 'Last login: Thu Oct 15 on ttys00' + id + '\r\nsee src/app.ts:12:5 and https://example.com\r\n' + prompt, cols: 80, rows: 24 }])),
+                  m1: { data: '\x1b[1m> api@1.0.0 dev\x1b[0m\r\n> node --watch src/server.js' + ' '.repeat(40) + '\r\n\r\n\x1b[32m●\x1b[0m Listening on http://localhost:3000\r\n\x1b[2m[12:04:31]\x1b[0m GET /health 200 2ms\r\n' + '─'.repeat(134) + '\r\n> ', cols: 134, rows: 18 },
+                },
+              });
+            }, 50);
+            break;
+          }
+          case 'input':
+            (window.__inputs ??= []).push(message.data);
+            send({ type: 'output', chunks: [[message.id, message.data === '\r' ? '\r\n' + prompt : message.data]] });
+            break;
+          case 'create': {
+            const id = 'n' + ++counter;
+            send({ type: 'created', terminal: info(id), placement: message.placement, focus: true });
+            setTimeout(() => send({ type: 'output', chunks: [[id, prompt]] }), 30);
+            break;
+          }
+          case 'close':
+            send({ type: 'removed', id: message.id });
+            break;
+          case 'rename':
+            send({ type: 'updated', terminal: { ...info(message.id), customTitle: message.title } });
+            break;
+        }
+      },
+    });
+  </script>
+  <script src="../dist/webview.js"></script>
+</body>
+</html>

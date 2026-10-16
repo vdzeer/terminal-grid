@@ -1,0 +1,14 @@
+**
+!dist/extension.js
+!dist/webview.js
+!dist/webview.css
+!dist/xterm.css
+!media/icon.png
+!media/tab-light.svg
+!media/tab-dark.svg
+!package.json
+!package.nls.json
+!package.nls.uk.json
+!README.md
+!CHANGELOG.md
+!LICENSE

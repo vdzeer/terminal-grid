@@ -1,0 +1,286 @@
+{
+  "name": "terminal-grid",
+  "displayName": "Terminal Grid",
+  "description": "All terminals of the window as a grid in a bottom-panel tab. Split, resize and rearrange them with drag and drop.",
+  "version": "0.3.0",
+  "publisher": "vdzeer",
+  "private": true,
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1B1F27",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/vdzeer/terminal-grid#readme",
+  "bugs": {
+    "url": "https://github.com/vdzeer/terminal-grid/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vdzeer/terminal-grid"
+  },
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "terminal",
+    "terminals",
+    "grid",
+    "split",
+    "tiling",
+    "panes",
+    "layout",
+    "multiplexer",
+    "tmux",
+    "drag and drop"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:terminalGrid.board"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "terminalGrid.open",
+        "title": "%command.open%",
+        "category": "Terminal Grid",
+        "icon": "$(layout-panel)"
+      },
+      {
+        "command": "terminalGrid.toggle",
+        "title": "%command.toggle%",
+        "category": "Terminal Grid"
+      },
+      {
+        "command": "terminalGrid.newTerminal",
+        "title": "%command.newTerminal%",
+        "category": "Terminal Grid",
+        "icon": "$(add)"
+      },
+      {
+        "command": "terminalGrid.arrange",
+        "title": "%command.arrange%",
+        "category": "Terminal Grid",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "terminalGrid.openInEditor",
+        "title": "%command.openInEditor%",
+        "category": "Terminal Grid",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "terminalGrid.moveToPanel",
+        "title": "%command.moveToPanel%",
+        "category": "Terminal Grid",
+        "icon": "$(layout-panel)"
+      },
+      {
+        "command": "terminalGrid.showHidden",
+        "title": "%command.showHidden%",
+        "category": "Terminal Grid",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "terminalGrid.killAll",
+        "title": "%command.killAll%",
+        "category": "Terminal Grid",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "terminalGrid.openFolder",
+        "title": "%command.openFolder%",
+        "category": "Terminal Grid"
+      },
+      {
+        "command": "terminalGrid.makeDefaultProfile",
+        "title": "%command.makeDefaultProfile%",
+        "category": "Terminal Grid"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "terminalGrid.openFolder",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "terminalGrid.openFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@31"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "terminalGrid.newTerminal",
+          "when": "view == terminalGrid.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "terminalGrid.arrange",
+          "when": "view == terminalGrid.view",
+          "group": "navigation@2"
+        },
+        {
+          "command": "terminalGrid.showHidden",
+          "when": "view == terminalGrid.view && terminalGrid.hasHidden",
+          "group": "navigation@3"
+        },
+        {
+          "command": "terminalGrid.openInEditor",
+          "when": "view == terminalGrid.view",
+          "group": "navigation@4"
+        },
+        {
+          "command": "terminalGrid.killAll",
+          "when": "view == terminalGrid.view",
+          "group": "more@1"
+        },
+        {
+          "command": "terminalGrid.open",
+          "when": "view == terminal",
+          "group": "navigation@100"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "terminalGrid.moveToPanel",
+          "when": "activeWebviewPanelId == 'terminalGrid.board'",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "terminalGrid.toggle",
+        "key": "ctrl+alt+cmd+t",
+        "mac": "ctrl+alt+cmd+t",
+        "win": "ctrl+alt+shift+t",
+        "linux": "ctrl+alt+shift+t"
+      },
+      {
+        "command": "terminalGrid.newTerminal",
+        "key": "ctrl+shift+`",
+        "when": "config.terminalGrid.newTerminalShortcut"
+      }
+    ],
+    "configuration": {
+      "title": "Terminal Grid",
+      "properties": {
+        "terminalGrid.restoreSessions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.restoreSessions%"
+        },
+        "terminalGrid.shell": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.shell%"
+        },
+        "terminalGrid.shellArgs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null,
+          "scope": "machine",
+          "markdownDescription": "%config.shellArgs%"
+        },
+        "terminalGrid.focusLayout": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.focusLayout%"
+        },
+        "terminalGrid.newTerminalShortcut": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.newTerminalShortcut%"
+        },
+        "terminalGrid.mirrorTerminals": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.mirrorTerminals%"
+        },
+        "terminalGrid.shiftEnterSequence": {
+          "type": "string",
+          "default": "\u001b\r",
+          "scope": "machine",
+          "markdownDescription": "%config.shiftEnterSequence%"
+        }
+      }
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "terminalGrid",
+          "title": "%view.container%",
+          "icon": "media/tab-dark.svg"
+        }
+      ]
+    },
+    "views": {
+      "terminalGrid": [
+        {
+          "type": "webview",
+          "id": "terminalGrid.view",
+          "name": "%view.name%"
+        }
+      ]
+    },
+    "terminal": {
+      "profiles": [
+        {
+          "id": "terminalGrid.profile",
+          "title": "Terminal Grid",
+          "icon": "layout"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit && eslint .",
+    "test": "node scripts/test.mjs",
+    "package": "npm run build -- --production && vsce package --no-dependencies -o dist/terminal-grid.vsix",
+    "install-ext": "npm run package && node scripts/install.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.3",
+    "@types/vscode": "1.105.0",
+    "@vscode/vsce": "4.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-search": "0.16.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/addon-unicode11": "0.9.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/headless": "6.0.0",
+    "@xterm/xterm": "6.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0"
+  },
+  "enabledApiProposals": [
+    "terminalDataWriteEvent",
+    "terminalDimensions"
+  ]
+}

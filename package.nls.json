@@ -1,0 +1,21 @@
+{
+  "command.open": "Open",
+  "command.newTerminal": "New Terminal",
+  "command.arrange": "Arrange as Grid",
+  "command.killAll": "Close All Terminals",
+  "command.openFolder": "Open in Terminal Grid",
+  "config.restoreSessions": "Reopen grid terminals after a window reload, in the same folders and with their last screen.",
+  "config.shell": "Shell for grid terminals. Empty uses the editor's default shell.",
+  "config.shellArgs": "Shell arguments. `null` starts a login shell on macOS, like Terminal.app.",
+  "view.container": "Terminal Grid",
+  "view.name": "Terminal Grid",
+  "command.openInEditor": "Open in Editor Tab",
+  "command.moveToPanel": "Move to Bottom Panel",
+  "command.toggle": "Show Grid or Go Back to the Editor",
+  "config.focusLayout": "When the grid opens in the bottom panel, maximize it and keep only the Explorer next to it. Opening a file brings the usual layout back.",
+  "config.newTerminalShortcut": "Ctrl+Shift+\\` opens a new terminal in the grid instead of the Terminal tab.",
+  "command.showHidden": "Show Hidden Terminals",
+  "config.mirrorTerminals": "Show terminals that were opened outside the grid (in the Terminal tab or by other extensions) as tiles. Needs `enable-proposed-api` for this extension in the editor's argv.json.",
+  "config.shiftEnterSequence": "What Shift+Enter sends in grid terminals. The default, ESC followed by Enter (the same as Alt+Enter), is what many command line programs read as a new line instead of sending the input. Empty sends a plain Enter.",
+  "command.makeDefaultProfile": "Make Default Terminal Profile"
+}

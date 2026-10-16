@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.test-out/
+*.vsix
+.DS_Store
+
+# Not published: agent notes and specs stay on disk only
+AGENTS.md
+/SPEC.md

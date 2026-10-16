@@ -1,0 +1,81 @@
+# On a version tag (v0.3.0 and so on): check, package, attach the .vsix to a
+# GitHub Release and publish it to Open VSX. Open VSX is skipped while the
+# OVSX_PAT secret is not set.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: Check that the tag matches package.json
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+      - run: npm run package
+      - run: mv dist/terminal-grid.vsix "terminal-grid-${GITHUB_REF_NAME#v}.vsix"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vsix
+          path: terminal-grid-*.vsix
+          if-no-files-found: error
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vsix
+      - name: Create the release with the .vsix attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" terminal-grid-*.vsix --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  open-vsx:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      HAS_OVSX_PAT: ${{ secrets.OVSX_PAT != '' }}
+    steps:
+      - if: env.HAS_OVSX_PAT != 'true'
+        run: echo "::notice::OVSX_PAT is not set, Open VSX skipped"
+      - if: env.HAS_OVSX_PAT == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vsix
+      - if: env.HAS_OVSX_PAT == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      # ovsx reads the token from OVSX_PAT; only this step gets it.
+      - if: env.HAS_OVSX_PAT == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx@1.2.0 publish terminal-grid-*.vsix --skip-duplicate
+
