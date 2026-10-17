@@ -180,6 +180,24 @@ async function run() {
   await vscode.commands.executeCommand('terminalGrid.open');
   await until('grid back after the prompt check', () => api.panelVisible(), 10000);
 
+  // Another extension (Lookout) can ask for the tile that runs a process.
+  api.write(first.id, 'sleep 600 &\r');
+  const shell = find(api, first.id).pid;
+  const sleeper = await until('sleep in the grid shell', () => {
+    try {
+      return Number(require('child_process').execFileSync('pgrep', ['-P', String(shell), 'sleep']).toString().trim().split('\n')[0]) || undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  check('a process in a tile is found and shown', (await vscode.commands.executeCommand('terminalGrid.revealProcess', sleeper)) === true && api.panelVisible());
+  check('a process elsewhere is not', (await vscode.commands.executeCommand('terminalGrid.revealProcess', process.pid)) === false);
+  try {
+    process.kill(sleeper);
+  } catch {
+    // Gone already.
+  }
+
   // Closing a twin in the Terminal tab closes the grid terminal too.
   const before3 = ptys(api).length;
   await vscode.commands.executeCommand('terminalGrid.newTerminal');

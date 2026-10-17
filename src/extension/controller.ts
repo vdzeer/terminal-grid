@@ -6,6 +6,7 @@ import { languageFor, translator, type Translate } from '../shared/i18n';
 import { remove, sanitize, type LayoutNode, type Placement } from '../shared/layout';
 import type { HostMessage, ViewMessage, ViewSettings } from '../shared/protocol';
 import { buildEnv, defaultShellArgs, resolveShell } from './env';
+import { ancestorsOf } from './ancestry';
 import { FocusLayout } from './focusLayout';
 import { RECLAIM_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts, type ReclaimState } from './reclaim';
 import { renderHtml, renderPlaceholder } from './html';
@@ -166,12 +167,37 @@ export class BoardController implements vscode.Disposable {
   // ---- hosts ----
 
   /** Shows the board where it lives: the editor tab when there is one, the bottom panel otherwise. */
-  open(): void {
+  async open(): Promise<void> {
     if (this.editorPanel) {
       this.editorPanel.reveal(undefined, false);
       return;
     }
-    void this.revealInPanel();
+    await this.revealInPanel();
+  }
+
+  /**
+   * Shows and focuses the tile running this process, or one of its
+   * ancestors. For other extensions that know a pid (Lookout uses it to go
+   * to a Claude Code session). False when no tile runs it.
+   */
+  async revealProcess(pid: unknown): Promise<boolean> {
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) return false;
+    const chain = await ancestorsOf(pid);
+    let id = this.manager.all().find((session) => session.kind === 'pty' && session.pty && chain.includes(session.pty.pid))?.id;
+    if (!id) {
+      for (const [terminal, mirrorId] of this.mirrors.all()) {
+        const shell = await terminal.processId;
+        if (shell && chain.includes(shell) && !this.hidden.has(mirrorId)) {
+          id = mirrorId;
+          break;
+        }
+      }
+    }
+    if (!id) return false;
+    await this.open();
+    if (this.ready) this.post({ type: 'focus', id });
+    else this.focusAfterInit = id;
+    return true;
   }
 
   private async revealInPanel(): Promise<void> {
@@ -183,7 +209,7 @@ export class BoardController implements vscode.Disposable {
   /** The shortcut: shows the grid, or, when it already fills the window, goes back to the editor. */
   toggle(): void {
     if (this.focusLayout.isActive && this.host === 'panel' && this.panelView?.visible) void this.focusLayout.leaveForEditor();
-    else this.open();
+    else void this.open();
   }
 
   openInEditor(): void {
@@ -595,7 +621,7 @@ export class BoardController implements vscode.Disposable {
     this.hidden.clear();
     void vscode.commands.executeCommand('setContext', 'terminalGrid.hasHidden', false);
     this.updateStatus();
-    this.open();
+    void this.open();
     if (this.boardWebview()) await this.sendInit();
   }
 
@@ -672,7 +698,7 @@ export class BoardController implements vscode.Disposable {
   }
 
   arrange(): void {
-    this.open();
+    void this.open();
     this.post({ type: 'arrange' });
   }
 
@@ -838,7 +864,7 @@ export class BoardController implements vscode.Disposable {
   /** Read-only view for the integration test; only returned outside production. */
   testApi() {
     return {
-      terminals: () => this.manager.all().map((s) => ({ ...s.info(), cols: s.cols, rows: s.rows })),
+      terminals: () => this.manager.all().map((s) => ({ ...s.info(), cols: s.cols, rows: s.rows, pid: s.pty?.pid })),
       write: (id: string, data: string) => this.manager.write(id, data),
       screen: (id: string) => this.manager.get(id)?.serialize(false) ?? '',
       layout: () => this.layout,

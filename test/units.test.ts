@@ -8,6 +8,7 @@ import { buildEnv, defaultShellArgs, hasChildProcess, processLabel, resolveShell
 import { loadNodePty, nodePtyCandidates } from '../src/extension/nodePty';
 import { PROFILE_NAME, platformKey, shouldOfferDefaultProfile } from '../src/extension/profile';
 import { readState } from '../src/extension/store';
+import { chainOf, parseParents } from '../src/extension/ancestry';
 import { RECLAIM_LIMIT, RECLAIM_WINDOW_MS, SUBMIT_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts } from '../src/extension/reclaim';
 import { dictionaries, languageFor, translator } from '../src/shared/i18n';
 import { matchShortcut } from '../src/shared/keys';
@@ -288,5 +289,14 @@ describe('taking the panel back after a tool showed a terminal', () => {
     assert.equal(tabChangeCounts(false, at - 200, at), true);
     assert.equal(tabChangeCounts(false, at - RECLAIM_WINDOW_MS - 1, at), false);
     assert.equal(tabChangeCounts(false, undefined, at), false);
+  });
+});
+
+describe('finding the tile of a process', () => {
+  it('walks from a process up to the root', () => {
+    const parents = parseParents('  1     0\n 500     1\n 510   500\n 520   510\nnoise\n 530   520\n');
+    assert.deepEqual(chainOf(parents, 530), [530, 520, 510, 500]);
+    assert.deepEqual(chainOf(parents, 999), [999]);
+    assert.deepEqual(chainOf(new Map([[5, 6], [6, 5]]), 5), [5, 6]);
   });
 });

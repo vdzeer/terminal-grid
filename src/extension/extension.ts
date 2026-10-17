@@ -39,14 +39,16 @@ export function activate(context: vscode.ExtensionContext): ReturnType<BoardCont
     }),
     vscode.commands.registerCommand('terminalGrid.openInEditor', () => ready.openInEditor()),
     vscode.commands.registerCommand('terminalGrid.moveToPanel', () => ready.moveToPanel()),
+    // Not in the manifest: for other extensions, which pass a process id.
+    vscode.commands.registerCommand('terminalGrid.revealProcess', (pid: unknown) => ready.revealProcess(pid)),
     vscode.commands.registerCommand('terminalGrid.newTerminal', () => {
-      ready.open();
+      void ready.open();
       ready.createSession({ cwd: ready.defaultCwd(), focus: true });
     }),
     vscode.commands.registerCommand('terminalGrid.arrange', () => ready.arrange()),
     vscode.commands.registerCommand('terminalGrid.killAll', () => ready.killAll()),
     vscode.commands.registerCommand('terminalGrid.openFolder', (uri?: vscode.Uri) => {
-      ready.open();
+      void ready.open();
       ready.createSession({ cwd: uri?.scheme === 'file' ? uri.fsPath : ready.defaultCwd(), focus: true });
     }),
     vscode.commands.registerCommand('terminalGrid.makeDefaultProfile', () => makeDefaultProfile(t)),

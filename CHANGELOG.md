@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0
+
+- New command for other extensions, `terminalGrid.revealProcess` (not in the
+  Command Palette): given a process id, it shows the grid and focuses the
+  tile whose shell runs that process, and returns whether it found one.
+  [Lookout](https://github.com/vdzeer/lookout) uses it to go to a Claude Code
+  session running in a tile.
+
 ## 0.3.2
 
 - The grid also stays in front when a tool shows the active terminal right

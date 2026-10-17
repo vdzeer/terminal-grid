@@ -214,6 +214,10 @@ All commands are in the "Terminal Grid" category of the Command Palette.
 | Make Default Terminal Profile | |
 | Open in Terminal Grid | Explorer context menu on a folder |
 
+For other extensions, `terminalGrid.revealProcess` takes a process id, shows
+the grid and focuses the tile whose shell runs that process. It returns
+`true` when it found one. It is not in the Command Palette.
+
 ## Keyboard shortcuts
 
 Editor-wide:
