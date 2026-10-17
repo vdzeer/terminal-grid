@@ -26,10 +26,12 @@ VSCodium and Windsurf. Tested on macOS with VS Code 1.142 and Antigravity IDE
   Setting: `terminalGrid.focusLayout`.
 - **The grid stays in front.** Some extensions show "the terminal" right after
   they open or close an editor tab; AI coding agents do it for every proposed
-  edit. That would switch the panel to the Terminal tab, so when it happens
-  within a moment of a tab change and the terminal is one the grid shows, the
-  grid takes the panel back and focuses that tile. Switching to the Terminal
-  tab yourself works as usual.
+  edit, and some also after every prompt sent. That would switch the panel to
+  the Terminal tab, so when it happens within a moment of a tab change or of
+  Enter in a tile, and the terminal is one the grid shows, the grid takes the
+  panel back and focuses the tile. After a prompt nothing else moves: grid mode
+  stays on and the shells keep their size. Switching to the Terminal tab
+  yourself works as usual.
 - **Grid shells are also in the Terminal tab.** A shell started by the grid
   shows in both places: one process, two views. Typing in either reaches it,
   closing it in either closes both, and the shell takes the size of whichever

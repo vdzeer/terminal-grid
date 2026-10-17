@@ -158,6 +158,28 @@ async function run() {
   await sleep(2500);
   check('closing the diff and showing the terminal keeps the grid too', api.panelVisible(), JSON.stringify(api.reclaimState()));
 
+  // Agents also show the terminal about half a second after every prompt sent
+  // from a tile. The grid stays, grid mode too, and the shell is never resized.
+  await vscode.commands.executeCommand('terminalGrid.open');
+  await until('grid mode for the prompt check', () => api.panelVisible() && api.gridMode(), 10000);
+  await sleep(1000);
+  const sizeOf = () => { const t = find(api, first.id); return `${t.cols}x${t.rows}`; };
+  const sizes = new Set([sizeOf()]);
+  api.input(first.id, '\r');
+  await sleep(600);
+  vscode.window.activeTerminal?.show();
+  for (let i = 0; i < 100; i++) {
+    await sleep(20);
+    sizes.add(sizeOf());
+  }
+  check('showing the terminal right after Enter in a tile keeps the grid and grid mode', api.panelVisible() && api.gridMode(), `panel ${api.panelVisible()} gridMode ${api.gridMode()} ${JSON.stringify(api.reclaimState())}`);
+  check('the shell keeps its size meanwhile', sizes.size === 1, [...sizes].join(' -> '));
+  vscode.window.activeTerminal?.show();
+  await sleep(2500);
+  check('showing it again with no Enter before leaves the Terminal tab in front', !api.panelVisible(), JSON.stringify(api.reclaimState()));
+  await vscode.commands.executeCommand('terminalGrid.open');
+  await until('grid back after the prompt check', () => api.panelVisible(), 10000);
+
   // Closing a twin in the Terminal tab closes the grid terminal too.
   const before3 = ptys(api).length;
   await vscode.commands.executeCommand('terminalGrid.newTerminal');

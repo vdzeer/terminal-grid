@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2
+
+- The grid also stays in front when a tool shows the active terminal right
+  after a prompt is sent from a tile, as AI coding agents do for every prompt
+  (about half a second after Enter, with no editor tab involved). The grid
+  takes the panel back at once, keeps grid mode and the layout around it, and
+  focuses the tile the prompt was typed in.
+- When the grid gives way to the Terminal tab, the shells wait for the tab to
+  settle before taking its size. Before, they followed every step of its
+  layout (one only about 11 columns wide) and a stale size, and programs such
+  as AI agents redrew at each one, leaving a narrow, broken screen.
+
 ## 0.3.1
 
 - The grid no longer gives way to the Terminal tab when a tool shows the

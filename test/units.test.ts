@@ -8,7 +8,7 @@ import { buildEnv, defaultShellArgs, hasChildProcess, processLabel, resolveShell
 import { loadNodePty, nodePtyCandidates } from '../src/extension/nodePty';
 import { PROFILE_NAME, platformKey, shouldOfferDefaultProfile } from '../src/extension/profile';
 import { readState } from '../src/extension/store';
-import { RECLAIM_LIMIT, RECLAIM_WINDOW_MS, shouldReclaim, tabChangeCounts } from '../src/extension/reclaim';
+import { RECLAIM_LIMIT, RECLAIM_WINDOW_MS, SUBMIT_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts } from '../src/extension/reclaim';
 import { dictionaries, languageFor, translator } from '../src/shared/i18n';
 import { matchShortcut } from '../src/shared/keys';
 import { findFileLinks } from '../src/shared/links';
@@ -251,24 +251,36 @@ describe('grid mode measurements', () => {
 
 describe('taking the panel back after a tool showed a terminal', () => {
   const at = 10_000;
-  const state = { tabChangeAt: at, hiddenAt: at + 50, reclaims: 0, ownHideAt: undefined };
+  const state = { ...noReclaim(), tabChangeAt: at, hiddenAt: at + 50 };
+  const submitted = { ...noReclaim(), submitAt: at, submitId: 'a', hiddenAt: at + 600 };
 
   it('takes it back when the grid is hidden right after an editor tab opened or closed, in either order', () => {
-    assert.equal(shouldReclaim(state, false, true), true);
-    assert.equal(shouldReclaim({ ...state, hiddenAt: at - 400 }, false, true), true);
-    assert.equal(shouldReclaim({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS }, false, true), true);
+    assert.equal(reclaimCause(state, false, true), 'tabChange');
+    assert.equal(reclaimCause({ ...state, hiddenAt: at - 400 }, false, true), 'tabChange');
+    assert.equal(reclaimCause({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS }, false, true), 'tabChange');
+  });
+
+  it('takes it back when the grid is hidden soon after Enter in a tile, but not before it', () => {
+    assert.equal(reclaimCause(submitted, false, true), 'submit');
+    assert.equal(reclaimCause({ ...submitted, hiddenAt: at + SUBMIT_WINDOW_MS }, false, true), 'submit');
+    assert.equal(reclaimCause({ ...submitted, hiddenAt: at + SUBMIT_WINDOW_MS + 1 }, false, true), undefined);
+    assert.equal(reclaimCause({ ...submitted, hiddenAt: at - 100 }, false, true), undefined);
+    // Enter counts even after the tab-change budget is spent.
+    assert.equal(reclaimCause({ ...submitted, reclaims: RECLAIM_LIMIT }, false, true), 'submit');
   });
 
   it('leaves it when the grid is on screen, the terminal is not in the grid, or the events are far apart', () => {
-    assert.equal(shouldReclaim(state, true, true), false);
-    assert.equal(shouldReclaim(state, false, false), false);
-    assert.equal(shouldReclaim({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS + 1 }, false, true), false);
-    assert.equal(shouldReclaim({ ...state, tabChangeAt: undefined }, false, true), false);
+    assert.equal(reclaimCause(state, true, true), undefined);
+    assert.equal(reclaimCause(state, false, false), undefined);
+    assert.equal(reclaimCause(submitted, false, false), undefined);
+    assert.equal(reclaimCause({ ...state, hiddenAt: at + RECLAIM_WINDOW_MS + 1 }, false, true), undefined);
+    assert.equal(reclaimCause({ ...state, tabChangeAt: undefined }, false, true), undefined);
   });
 
   it('never fights a hide of its own or in a loop', () => {
-    assert.equal(shouldReclaim({ ...state, ownHideAt: at + 40 }, false, true), false);
-    assert.equal(shouldReclaim({ ...state, reclaims: RECLAIM_LIMIT }, false, true), false);
+    assert.equal(reclaimCause({ ...state, ownHideAt: at + 40 }, false, true), undefined);
+    assert.equal(reclaimCause({ ...submitted, ownHideAt: at + 580 }, false, true), undefined);
+    assert.equal(reclaimCause({ ...state, reclaims: RECLAIM_LIMIT }, false, true), undefined);
   });
 
   it('counts a tab change while the grid is on screen or just left it', () => {

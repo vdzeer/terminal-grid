@@ -7,7 +7,7 @@ import { remove, sanitize, type LayoutNode, type Placement } from '../shared/lay
 import type { HostMessage, ViewMessage, ViewSettings } from '../shared/protocol';
 import { buildEnv, defaultShellArgs, resolveShell } from './env';
 import { FocusLayout } from './focusLayout';
-import { RECLAIM_WINDOW_MS, noReclaim, shouldReclaim, tabChangeCounts, type ReclaimState } from './reclaim';
+import { RECLAIM_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts, type ReclaimState } from './reclaim';
 import { renderHtml, renderPlaceholder } from './html';
 import type { NodePty } from './nodePty';
 import { Mirrors } from './mirrors';
@@ -21,6 +21,8 @@ export const VIEW_TYPE = 'terminalGrid.board';
 export const PANEL_VIEW_ID = 'terminalGrid.view';
 const SNAPSHOT_EVERY_MS = 15_000;
 const MIRROR_POLL_MS = 1500;
+/** How long the Terminal tab gets to lay itself out after the grid hides (see `settleNativeSizes`). */
+const NATIVE_SETTLE_MS = 300;
 /** globalState: the notice about turning mirrors on was shown. It is shown once, ever. */
 const MIRROR_NOTICE_KEY = 'terminalGrid.mirrorNoticeShown';
 
@@ -52,6 +54,7 @@ export class BoardController implements vscode.Disposable {
   private restored = false;
   private focusAfterInit: string | undefined;
   private saveTimer: NodeJS.Timeout | undefined;
+  private nativeSettleTimer: NodeJS.Timeout | undefined;
   private readonly snapshotTimer: NodeJS.Timeout;
   private readonly mirrorPollTimer: NodeJS.Timeout;
   private readonly manager: SessionManager;
@@ -62,7 +65,7 @@ export class BoardController implements vscode.Disposable {
   private readonly mirrors: Mirrors;
   private readonly focusLayout: FocusLayout;
   private readonly status: vscode.StatusBarItem;
-  /** Tab changes that may push the grid out of the panel (see reclaim.ts). */
+  /** Tab changes and prompts sent that may push the grid out of the panel (see reclaim.ts). */
   private reclaim: ReclaimState = noReclaim();
   /** The last tab change, for the integration run's diagnostics. */
   private lastTabEvent = '';
@@ -257,12 +260,14 @@ export class BoardController implements vscode.Disposable {
     ];
     subscriptions.push(
       view.onDidChangeVisibility(() => {
-        this.applyAllSizes();
-        if (view.visible) void this.focusLayout.enter();
-        else {
-          void this.focusLayout.onGridHidden();
+        if (view.visible) {
+          this.applyAllSizes();
+          void this.focusLayout.enter();
+        } else {
           this.reclaim.hiddenAt = Date.now();
-          this.reclaimPanel();
+          this.settleNativeSizes();
+          // Taken back at once after a prompt: grid mode and the layout around it stay as they were.
+          if (this.reclaimPanel() !== 'submit') void this.focusLayout.onGridHidden();
         }
       }),
     );
@@ -373,6 +378,10 @@ export class BoardController implements vscode.Disposable {
         const session = this.manager.get(message.id);
         if (session?.kind === 'mirror') this.mirrors.terminalOf(message.id)?.sendText(message.data, false);
         else this.manager.write(message.id, message.data);
+        // Enter sends a prompt, and some agents show the terminal in answer (see reclaim.ts).
+        if (session && message.data === '\r' && this.host === 'panel' && this.panelView?.visible) {
+          this.reclaim = { ...this.reclaim, submitAt: Date.now(), submitId: session.id };
+        }
         return;
       }
       case 'resize': {
@@ -465,17 +474,26 @@ export class BoardController implements vscode.Disposable {
   }
 
   /** Takes the panel back when a tool showed a grid terminal in the Terminal tab (see reclaim.ts). */
-  private reclaimPanel(): void {
-    if (this.host !== 'panel') return;
+  private reclaimPanel(): 'tabChange' | 'submit' | undefined {
+    if (this.host !== 'panel') return undefined;
     const active = vscode.window.activeTerminal;
     const id = active ? this.sessionIdOf(active) : undefined;
     const state = { ...this.reclaim, ownHideAt: this.focusLayout.closedPanelAt };
-    if (!shouldReclaim(state, this.panelView?.visible === true, id !== undefined)) return;
-    this.reclaim.reclaims += 1;
-    this.focusLayout.holdLayout(RECLAIM_WINDOW_MS);
+    const cause = reclaimCause(state, this.panelView?.visible === true, id !== undefined);
+    if (!cause) return undefined;
+    let focusId = id;
+    if (cause === 'submit') {
+      // Back to the tile the prompt was typed in, which need not be the active terminal.
+      if (this.reclaim.submitId && this.manager.get(this.reclaim.submitId)) focusId = this.reclaim.submitId;
+      this.reclaim.submitAt = undefined;
+    } else {
+      this.reclaim.reclaims += 1;
+      this.focusLayout.holdLayout(RECLAIM_WINDOW_MS);
+    }
     void vscode.commands.executeCommand(`${PANEL_VIEW_ID}.focus`).then(() => {
-      if (id && this.ready) this.post({ type: 'focus', id });
+      if (focusId && this.ready) this.post({ type: 'focus', id: focusId });
     });
+    return cause;
   }
 
   /** The grid tile that shows this terminal: a grid shell's twin, or a mirror that is not hidden. */
@@ -507,13 +525,30 @@ export class BoardController implements vscode.Disposable {
    */
   private applySize(session: Session): void {
     if (session.kind !== 'pty') return;
+    const visible = this.gridVisible();
+    if (!visible && this.nativeSettleTimer) return;
     const native = this.twins.get(session.id)?.nativeSize;
-    const size = this.gridVisible() ? (session.gridSize ?? native) : (native ?? session.gridSize);
+    const size = visible ? (session.gridSize ?? native) : (native ?? session.gridSize);
     if (size) this.manager.resize(session.id, size.cols, size.rows);
   }
 
   private applyAllSizes(): void {
     for (const session of this.manager.all()) this.applySize(session);
+  }
+
+  /**
+   * Right after the grid hides, the Terminal tab is still laying itself out:
+   * its size passes through a few values (one only about 11 columns wide), and
+   * a twin's last known size may be long out of date. Programs redraw on every
+   * resize, so the shells wait for the layout to settle, and a grid that is
+   * taken straight back never resizes them at all.
+   */
+  private settleNativeSizes(): void {
+    if (this.nativeSettleTimer) clearTimeout(this.nativeSettleTimer);
+    this.nativeSettleTimer = setTimeout(() => {
+      this.nativeSettleTimer = undefined;
+      this.applyAllSizes();
+    }, NATIVE_SETTLE_MS);
   }
 
   // ---- mirrors ----
@@ -857,6 +892,7 @@ export class BoardController implements vscode.Disposable {
     clearInterval(this.snapshotTimer);
     clearInterval(this.mirrorPollTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.nativeSettleTimer) clearTimeout(this.nativeSettleTimer);
     for (const s of this.editorSubscriptions) s.dispose();
     for (const s of this.subscriptions) s.dispose();
     this.manager.dispose();

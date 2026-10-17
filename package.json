@@ -2,7 +2,7 @@
   "name": "terminal-grid",
   "displayName": "Terminal Grid",
   "description": "All terminals of the window as a grid in a bottom-panel tab. Split, resize and rearrange them with drag and drop.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "vdzeer",
   "private": true,
   "license": "MIT",
