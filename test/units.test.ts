@@ -9,9 +9,12 @@ import { loadNodePty, nodePtyCandidates } from '../src/extension/nodePty';
 import { PROFILE_NAME, platformKey, shouldOfferDefaultProfile } from '../src/extension/profile';
 import { readState } from '../src/extension/store';
 import { chainOf, parseParents } from '../src/extension/ancestry';
+import { filePaths, pasteable, shellQuote } from '../src/extension/drop';
+import { readTitle } from '../src/extension/agentTitle';
+import { withShellIntegration } from '../src/extension/shellIntegration';
 import { RECLAIM_LIMIT, RECLAIM_WINDOW_MS, SUBMIT_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts } from '../src/extension/reclaim';
 import { dictionaries, languageFor, translator } from '../src/shared/i18n';
-import { matchShortcut } from '../src/shared/keys';
+import { matchShortcut, terminalSequence } from '../src/shared/keys';
 import { findFileLinks } from '../src/shared/links';
 import { looksMaximized, sideBarWasOpen } from '../src/shared/viewport';
 
@@ -230,6 +233,87 @@ describe('shortcuts', () => {
     assert.equal(matchShortcut(key({ code: 'KeyD', ctrlKey: true }), true), undefined);
     assert.equal(matchShortcut(key({ code: 'KeyD', ctrlKey: true }), false), undefined);
     assert.equal(matchShortcut(key({ code: 'KeyD', ctrlKey: true, shiftKey: true }), false), 'splitRight');
+  });
+
+  it('has keys for a new agent and for jumping between commands', () => {
+    assert.equal(matchShortcut(key({ code: 'KeyT', metaKey: true, shiftKey: true }), true), 'newAgent');
+    assert.equal(matchShortcut(key({ code: 'KeyA', ctrlKey: true, shiftKey: true }), false), 'newAgent');
+    assert.equal(matchShortcut(key({ key: 'ArrowUp', metaKey: true }), true), 'previousCommand');
+    assert.equal(matchShortcut(key({ key: 'ArrowDown', ctrlKey: true }), false), 'nextCommand');
+    assert.equal(matchShortcut(key({ key: 'ArrowLeft', ctrlKey: true }), false), undefined);
+    assert.equal(matchShortcut(key({ key: 'ArrowUp', metaKey: true, altKey: true }), true), 'focusUp');
+  });
+
+  it('sends what the Terminal tab sends for line editing keys', () => {
+    assert.equal(terminalSequence(key({ code: 'Backspace', metaKey: true }), true), '\x15');
+    assert.equal(terminalSequence(key({ code: 'ArrowLeft', metaKey: true }), true), '\x01');
+    assert.equal(terminalSequence(key({ code: 'Backspace', altKey: true }), true), '\x17');
+    assert.equal(terminalSequence(key({ code: 'ArrowRight', altKey: true }), true), '\x1bf');
+    assert.equal(terminalSequence(key({ code: 'Backspace', ctrlKey: true }), false), '\x17');
+    assert.equal(terminalSequence(key({ code: 'Backspace', metaKey: true, shiftKey: true }), true), undefined);
+    assert.equal(terminalSequence(key({ code: 'Backspace' }), true), undefined);
+    // Grid shortcuts keep their keys.
+    assert.equal(terminalSequence(key({ code: 'ArrowLeft', metaKey: true, altKey: true }), true), undefined);
+    assert.equal(terminalSequence(key({ code: 'ArrowLeft', ctrlKey: true, altKey: true }), false), undefined);
+  });
+});
+
+describe('program titles', () => {
+  it('reads the status mark agents put before their title', () => {
+    assert.deepEqual(readTitle('◐ Fix the login form'), { label: 'Fix the login form', working: true });
+    assert.deepEqual(readTitle('◑ Fix the login form'), { label: 'Fix the login form', working: true });
+    assert.deepEqual(readTitle('✳ Fix the login form'), { label: 'Fix the login form', working: false });
+    assert.deepEqual(readTitle('⠋ Thinking'), { label: 'Thinking', working: true });
+    assert.deepEqual(readTitle('vim notes.md'), { label: 'vim notes.md', working: undefined });
+  });
+});
+
+describe('shell integration', () => {
+  const env = { HOME: '/Users/me', PATH: '/bin' };
+  it('starts zsh with the editor scripts through ZDOTDIR', () => {
+    const launch = withShellIntegration('/bin/zsh', ['-l'], env, '/app', '/run/zsh');
+    assert.deepEqual(launch?.args, ['-il']);
+    assert.equal(launch?.env.ZDOTDIR, '/run/zsh');
+    assert.equal(launch?.env.USER_ZDOTDIR, '/Users/me');
+    assert.equal(launch?.env.VSCODE_INJECTION, '1');
+    assert.equal(withShellIntegration('/bin/zsh', [], { ...env, ZDOTDIR: '/Users/me/.config/zsh' }, '/app', '/run/zsh')?.env.USER_ZDOTDIR, '/Users/me/.config/zsh');
+  });
+
+  it('starts bash with its init file', () => {
+    const launch = withShellIntegration('/bin/bash', ['-l'], env, '/app', undefined);
+    assert.deepEqual(launch?.args, ['--init-file', '/app/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh']);
+    assert.equal(launch?.env.VSCODE_SHELL_LOGIN, '1');
+  });
+
+  it('leaves other shells and custom arguments alone', () => {
+    assert.equal(withShellIntegration('/bin/zsh', ['-l', '-o', 'vi'], env, '/app', '/run/zsh'), undefined);
+    assert.equal(withShellIntegration('/usr/bin/fish', [], env, '/app', '/run/zsh'), undefined);
+    assert.equal(withShellIntegration('/bin/zsh', [], env, '/app', undefined), undefined);
+  });
+});
+
+describe('dropped files', () => {
+  it('takes local paths from file URIs only', () => {
+    assert.deepEqual(filePaths(['file:///Users/me/a%20b.png', 'vscode-remote://ssh/x', 42, 'file://host/']), ['/Users/me/a b.png']);
+  });
+
+  it('quotes a path only when the shell needs it', () => {
+    assert.equal(shellQuote('/Users/me/src/app.ts', 'darwin'), '/Users/me/src/app.ts');
+    assert.equal(shellQuote('/Users/me/My Shot.png', 'darwin'), "'/Users/me/My Shot.png'");
+    assert.equal(shellQuote("/tmp/it's $HOME", 'linux'), "'/tmp/it'\\''s $HOME'");
+    assert.equal(shellQuote('C:\\My Files\\a.txt', 'win32'), '"C:\\My Files\\a.txt"');
+  });
+
+  it('leaves out names a shell would read as more than a path', () => {
+    assert.equal(pasteable('/Users/me/My Shot.png', 'darwin'), true);
+    assert.equal(pasteable("/tmp/it's here.txt", 'linux'), true);
+    // Ends a bracketed paste, clears the line and presses Enter.
+    assert.equal(pasteable('/tmp/x\x1b[201~\x15touch pwned\r', 'darwin'), false);
+    assert.equal(pasteable('/tmp/a\nb', 'linux'), false);
+    assert.equal(pasteable("/tmp/a\\'; touch pwned; #", 'linux'), false);
+    assert.equal(pasteable('C:\\repo\\$(calc).txt', 'win32'), false);
+    assert.equal(pasteable('C:\\repo\\%PATH%.txt', 'win32'), false);
+    assert.equal(pasteable('C:\\My Files\\a.txt', 'win32'), true);
   });
 });
 

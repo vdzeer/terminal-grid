@@ -72,6 +72,11 @@ async function run() {
   const size = find(api, first.id);
   check('terminal was resized by the webview', size.cols !== 80 || size.rows !== 24, `${size.cols}x${size.rows}`);
 
+  // Shell integration: the editor's own scripts run in grid shells.
+  api.write(first.id, 'echo TG_SI_$VSCODE_SHELL_INTEGRATION\r');
+  await until('shell integration check', () => api.screen(first.id).includes('TG_SI_1'), 8000).catch(() => null);
+  check('grid shells start with shell integration', api.screen(first.id).includes('TG_SI_1'), (api.screen(first.id).match(/TG_SI_\S*/g) || []).join(' '));
+
   api.write(first.id, 'cd /tmp\r');
   const cwd = await until('cwd update', () => (find(api, first.id).cwd.endsWith('/tmp') ? find(api, first.id).cwd : null));
   check('cwd follows cd', true, cwd);
@@ -113,8 +118,14 @@ async function run() {
   check('layout survives the moves', JSON.stringify(api.layout()) === layout, JSON.stringify(api.layout()));
 
   // Test runs keep workspace storage in memory, so a real restart would lose
-  // it; the reload is simulated inside this window instead.
+  // it; the reload is simulated inside this window instead. With the pty host
+  // the shells keep running through it, and what they print meanwhile shows.
+  const persistent = api.persistent();
+  check('grid shells run in the pty host', persistent);
   const before = ptys(api).map((t) => t.id).join(',');
+  const pidBefore = find(api, first.id).pid;
+  api.write(first.id, '(sleep 1; echo TG_DURING_$((3+4))) &\r');
+  await sleep(300);
   await api.simulateReload();
   const terminals = await until('restored terminals', () => (ptys(api).length >= 3 ? ptys(api) : null));
   check('same terminals after reload', terminals.map((t) => t.id).join(',') === before, terminals.map((t) => `${t.process}@${t.cwd}`).join(', '));
@@ -122,12 +133,32 @@ async function run() {
   check('first terminal restored in /tmp', restored.cwd.endsWith('/tmp'), restored.cwd);
   await until('history', () => api.screen(first.id).includes('TG_OK_42'), 8000).catch(() => null);
   check('screen history restored', api.screen(first.id).includes('TG_OK_42'));
-  check('restore note printed', /History restored|Історію відновлено/.test(api.screen(first.id)));
+  if (persistent) {
+    check('the same shell process runs on', find(api, first.id).pid === pidBefore, `${pidBefore} -> ${find(api, first.id).pid}`);
+    await until('output from during the reload', () => api.screen(first.id).includes('TG_DURING_7'), 5000).catch(() => null);
+    check('output printed during the reload shows', api.screen(first.id).includes('TG_DURING_7'));
+  } else {
+    check('restore note printed', /History restored|Історію відновлено/.test(api.screen(first.id)));
+  }
   api.write(first.id, 'echo TG_AFTER_RESTORE\r');
   await until('new shell works', () => api.screen(first.id).includes('TG_AFTER_RESTORE'));
   check('restored terminal has a live shell', true);
   const restoredLayout = JSON.stringify(api.layout());
   check('layout restored', restoredLayout === layout, restoredLayout);
+
+  // A program's title names the tile; a spinner mark says it works, and
+  // stopping while the user looks elsewhere asks for attention.
+  api.write(first.id, `sh -c 'printf "\\033]0;\u25d0 Busy task\\007"; sleep 2; printf "\\033]0;\u2733 Busy task\\007"; sleep 3'\r`);
+  const busy = await until('working status', () => (find(api, first.id).working ? find(api, first.id) : null), 8000).catch(() => find(api, first.id));
+  check('a spinner in the title shows the tile as working', !!busy.working && busy.title === 'Busy task', JSON.stringify({ title: busy.title, working: busy.working, process: busy.process }));
+  // The user moves to another tile before the program is done.
+  await api.focused(ptys(api).find((t) => t.id !== first.id).id);
+  const done = await until('attention', () => (find(api, first.id).attention ? find(api, first.id) : null), 8000).catch(() => find(api, first.id));
+  check('stopping while no one looks asks for attention', !!done.attention && !done.working, JSON.stringify({ title: done.title, working: done.working, attention: done.attention }));
+  await api.focused(first.id);
+  check('focusing the tile clears it', !find(api, first.id).attention);
+  await until('title cleared', () => find(api, first.id).process === 'zsh' && !find(api, first.id).title, 8000).catch(() => null);
+  check('the title goes with the program', !find(api, first.id).title, find(api, first.id).title);
 
   // Typing in the Terminal tab reaches the same shell.
   const twin = api.twinTerminal(first.id);
@@ -135,12 +166,18 @@ async function run() {
   await until('twin input', () => api.screen(first.id).includes('TG_FROM_TAB'));
   check('typing in the Terminal tab reaches the grid shell', true);
 
-  // A tool that shows the active terminal right after opening or closing a diff
-  // (AI coding agents do) must not push the grid out of the panel; the user
-  // switching to the Terminal tab on their own still does.
-  twin.show(true);
+  // Tools show the active terminal at moments of their own: AI coding agents
+  // after every diff and at the start of every turn, also turns the user did
+  // not start with Enter. Showing a twin keeps the grid in front; the user
+  // switching to the Terminal tab still leaves it there.
+  await vscode.commands.executeCommand('terminalGrid.open');
+  await until('grid mode for the show check', () => api.panelVisible() && api.gridMode(), 10000);
+  twin.show();
+  await sleep(1500);
+  check('a tool showing a twin keeps the grid and grid mode', api.panelVisible() && api.gridMode(), JSON.stringify(api.reclaimState()));
+  await vscode.commands.executeCommand('workbench.action.terminal.focus');
   await sleep(2500);
-  check('showing a twin on its own leaves the Terminal tab in front', !api.panelVisible(), JSON.stringify(api.reclaimState()));
+  check('the user switching to the Terminal tab leaves it in front', !api.panelVisible(), JSON.stringify(api.reclaimState()));
   await vscode.commands.executeCommand('terminalGrid.open');
   await until('grid back for the diff check', () => api.panelVisible() && api.gridMode(), 10000);
   const folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
@@ -174,11 +211,10 @@ async function run() {
   }
   check('showing the terminal right after Enter in a tile keeps the grid and grid mode', api.panelVisible() && api.gridMode(), `panel ${api.panelVisible()} gridMode ${api.gridMode()} ${JSON.stringify(api.reclaimState())}`);
   check('the shell keeps its size meanwhile', sizes.size === 1, [...sizes].join(' -> '));
+  await sleep(3500);
   vscode.window.activeTerminal?.show();
-  await sleep(2500);
-  check('showing it again with no Enter before leaves the Terminal tab in front', !api.panelVisible(), JSON.stringify(api.reclaimState()));
-  await vscode.commands.executeCommand('terminalGrid.open');
-  await until('grid back after the prompt check', () => api.panelVisible(), 10000);
+  await sleep(1500);
+  check('showing it again with no Enter before keeps the grid too', api.panelVisible() && api.gridMode(), JSON.stringify(api.reclaimState()));
 
   // Another extension (Lookout) can ask for the tile that runs a process.
   api.write(first.id, 'sleep 600 &\r');
@@ -197,6 +233,16 @@ async function run() {
   } catch {
     // Gone already.
   }
+
+  // "New Agent Session" types the configured command into a new grid shell.
+  await vscode.workspace.getConfiguration('terminalGrid').update('agentCommand', 'echo TG_AGENT_$((5*5))', vscode.ConfigurationTarget.Global);
+  const beforeAgent = new Set(ptys(api).map((t) => t.id));
+  await vscode.commands.executeCommand('terminalGrid.newAgent');
+  const agent = await until('agent terminal', () => ptys(api).find((t) => !beforeAgent.has(t.id)));
+  await until('agent command', () => api.screen(agent.id).includes('TG_AGENT_25'), 10000).catch(() => null);
+  check('a new agent session runs the agent command', api.screen(agent.id).includes('TG_AGENT_25'));
+  await api.close(agent.id);
+  await until('agent closed', () => !find(api, agent.id), 8000).catch(() => null);
 
   // Closing a twin in the Terminal tab closes the grid terminal too.
   const before3 = ptys(api).length;

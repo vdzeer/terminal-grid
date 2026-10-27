@@ -13,6 +13,12 @@ export interface TerminalInfo {
   process: string;
   /** Name the user gave the tile; empty when they did not rename it. */
   customTitle: string;
+  /** Title the program in the foreground set, without its status mark. */
+  title?: string;
+  /** The program says it is working (an AI agent mid-turn). */
+  working?: boolean;
+  /** It finished or asked for something while the user looked elsewhere. */
+  attention?: boolean;
   cwd: string;
   /** Mirrors keep the size of the real terminal; the tile scales its text to fit. */
   fixedSize?: { cols: number; rows: number };
@@ -61,7 +67,9 @@ export type HostMessage =
   | { type: 'removed'; id: string }
   | { type: 'settings'; settings: ViewSettings }
   | { type: 'arrange' }
-  | { type: 'focus'; id: string };
+  | { type: 'focus'; id: string }
+  /** Text to paste into a tile: the paths of files dropped on it. */
+  | { type: 'paste'; id: string; text: string };
 
 /** Messages from the webview to the extension. */
 export type ViewMessage =
@@ -69,13 +77,18 @@ export type ViewMessage =
   | { type: 'input'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'ack'; id: string; chars: number }
-  | { type: 'create'; placement?: Placement; cwdFrom?: string }
+  /** `agent`: start the configured AI agent in the new shell, `worktree` in a new git worktree. */
+  | { type: 'create'; placement?: Placement; cwdFrom?: string; agent?: 'plain' | 'worktree' }
+  /** A tile got the keyboard focus. */
+  | { type: 'focused'; id: string }
   | { type: 'close'; id: string }
   | { type: 'restart'; id: string }
   | { type: 'rename'; id: string; title: string }
   | { type: 'layout'; layout: LayoutNode | null }
   | { type: 'openUrl'; url: string }
   | { type: 'openFile'; id: string; path: string; line?: number; column?: number }
+  /** Files dropped on a tile: URIs when the drag had them, otherwise only file names. */
+  | { type: 'drop'; id: string; uris: string[]; names: string[] }
   /** From the placeholder page in the bottom panel. */
   | { type: 'bringHere' }
   /** The webview's size and the window's, for measuring the editor layout. */

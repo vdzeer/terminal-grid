@@ -4,5 +4,5 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/extension", "src/shared", "test"]
+  "include": ["src/extension", "src/ptyHost", "src/shared", "test"]
 }

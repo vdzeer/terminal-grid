@@ -4,6 +4,7 @@
   --tg-header-bg: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background));
   --tg-muted: var(--vscode-descriptionForeground);
   --tg-accent: var(--vscode-focusBorder);
+  --tg-attention: var(--vscode-notificationsWarningIcon-foreground, #cca700);
   --tg-hover: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.18));
   --tg-ease: cubic-bezier(0.2, 0.75, 0.25, 1);
 }
@@ -234,6 +235,52 @@ svg {
 
 .tile-icon {
   opacity: 0.75;
+}
+
+/* What the program says it is doing: a spinner while it works, a dot once it waits for the user. */
+.tile-status {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.tile-status.working {
+  border: 1.5px solid var(--tg-accent);
+  border-right-color: transparent;
+  animation: tg-spin 0.9s linear infinite;
+}
+
+.tile-status.attention {
+  background: var(--tg-attention);
+}
+
+.tile.attention {
+  border-color: var(--tg-attention);
+}
+
+.tile.attention .tile-header {
+  background: color-mix(in srgb, var(--tg-attention) 18%, var(--tg-header-bg));
+  color: var(--vscode-foreground);
+}
+
+@keyframes tg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Exit code of a command, from shell integration: a bar in the gutter left of its prompt. */
+.command-mark {
+  margin-left: -6px;
+  width: 3px !important;
+  border-radius: 2px;
+  background: var(--vscode-terminalCommandDecoration-successBackground, #1b81a8);
+  pointer-events: none;
+}
+
+.command-mark.failed {
+  background: var(--vscode-terminalCommandDecoration-errorBackground, #f14c4c);
 }
 
 .tile-title {
@@ -534,5 +581,9 @@ body.host-panel {
   .board.animate .splitter,
   .drop-indicator {
     transition: none;
+  }
+
+  .tile-status.working {
+    animation: none;
   }
 }

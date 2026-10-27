@@ -16,7 +16,8 @@ VSCodium and Windsurf. Tested on macOS with VS Code 1.142 and Antigravity IDE
 - **A tab in the bottom panel.** "Terminal Grid" sits next to "Terminal".
   `⌃⌥⌘T` (Ctrl+Alt+Shift+T on Windows and Linux) opens it; pressed again while
   the grid fills the window, it goes back to the editor. A status bar item
-  shows how many terminals the grid holds and opens the grid.
+  shows how many terminals the grid holds and opens the grid, or goes to the
+  terminal that waits for you when one does.
 - **Grid mode.** While the grid is open in the panel, the panel is maximized,
   the Explorer is shown and the secondary side bar (the Agent side bar in
   Antigravity) is closed. Opening a file brings the previous layout back. A
@@ -24,14 +25,24 @@ VSCodium and Windsurf. Tested on macOS with VS Code 1.142 and Antigravity IDE
   the panel, so the diff and the grid are on screen together.
   Maximizing only happens when `workbench.panel.defaultAlignment` is `center`.
   Setting: `terminalGrid.focusLayout`.
-- **The grid stays in front.** Some extensions show "the terminal" right after
-  they open or close an editor tab; AI coding agents do it for every proposed
-  edit, and some also after every prompt sent. That would switch the panel to
-  the Terminal tab, so when it happens within a moment of a tab change or of
-  Enter in a tile, and the terminal is one the grid shows, the grid takes the
-  panel back and focuses the tile. After a prompt nothing else moves: grid mode
-  stays on and the shells keep their size. Switching to the Terminal tab
-  yourself works as usual.
+- **The grid stays in front.** Some extensions show "the terminal" at moments
+  of their own; AI coding agents do it for every proposed edit and at the
+  start of every turn. While the grid is on screen, showing a grid shell keeps
+  the grid in front and focuses it instead of switching the panel to the
+  Terminal tab. For mirrors, the grid takes the panel back when that happens
+  within a moment of a tab change or of Enter in a tile. Switching to the
+  Terminal tab yourself works as usual.
+- **AI agents at a glance.** A tile takes the title its program sets (an
+  agent's current task, for example). While an agent works, a spinner shows in
+  the tile header; when it stops while you are looking at another tile or
+  window, the tile is marked as waiting for you until you go back to it. "Go
+  to the Terminal Waiting for You" (`⌃⌥⌘J`, Ctrl+Alt+Shift+J) jumps there.
+  This follows the status mark agents such as Claude Code put in the terminal
+  title, and the terminal bell.
+- **New agent session.** "New Agent Session" (the sparkle in the panel title,
+  `⇧⌘T` in the grid) opens a grid shell and starts `terminalGrid.agentCommand`
+  in it (`claude` by default). "New Agent Session in a Git Worktree" adds
+  `--worktree`, which Claude Code turns into a worktree of its own.
 - **Grid shells are also in the Terminal tab.** A shell started by the grid
   shows in both places: one process, two views. Typing in either reaches it,
   closing it in either closes both, and the shell takes the size of whichever
@@ -53,12 +64,22 @@ VSCodium and Windsurf. Tested on macOS with VS Code 1.142 and Antigravity IDE
   even out. "Arrange as Grid" lays all tiles out evenly.
 - **Terminal basics.** Find, clear, maximize a tile, move focus between tiles,
   `⌘`-click (Ctrl-click) on URLs and file paths such as `src/app.ts:12:5`.
-  Double-click a title to rename a tile. Fonts, cursor and colors follow
+  Double-click a title to rename a tile. Line editing keys (`⌘⌫`, `⌘←`,
+  `⌥⌫` and the rest) send what the Terminal tab sends. Files dropped on a
+  tile with Shift held go in as their paths. With shell integration (the
+  editor's own scripts, for zsh and bash, following
+  `terminal.integrated.shellIntegration.enabled`), each command gets a mark
+  in the gutter, red when it failed, and `⌘↑`/`⌘↓` (Ctrl+↑/↓) jump between
+  commands. Fonts, cursor and colors follow
   `terminal.integrated.*` and the color theme, and
   `terminal.integrated.env.<platform>` is applied to grid shells.
-- **Survives window reloads.** Grid shells are started again after a reload
-  in their last folder, with their last screen restored (the programs that
-  were running are not, see [Known limitations](#known-limitations)).
+- **Survives window reloads.** Grid shells run in a small background process
+  (the pty host), one per workspace, so a window reload does not end them:
+  the programs in them, an AI agent mid-task included, keep running, and the
+  grid takes them back with everything they printed meanwhile. After the
+  window is closed the pty host waits a minute for it to come back, then ends
+  the shells. Shells it no longer has are started again in their last folder,
+  with their last screen restored.
 - **Editor tab.** "Open in Editor Tab" moves the grid into an editor tab;
   "Move to Bottom Panel" moves it back.
 - **Explorer.** "Open in Terminal Grid" in the context menu of a folder opens
@@ -193,6 +214,7 @@ remove the `terminal.integrated.defaultProfile.<platform>` line from your user
 | `terminalGrid.newTerminalShortcut` | `true` | `` Ctrl+Shift+` `` opens a new grid terminal instead of the editor's own "Create New Terminal". |
 | `terminalGrid.mirrorTerminals` | `true` | Show terminals opened outside the grid as mirror tiles. Needs the proposed APIs. |
 | `terminalGrid.shiftEnterSequence` | `"\u001b\r"` | What Shift+Enter sends in grid terminals. Empty sends a plain Enter. User or remote settings only. |
+| `terminalGrid.agentCommand` | `"claude"` | What "New Agent Session" types into a new grid terminal. User or remote settings only. |
 
 The settings marked "user or remote settings only" decide what runs in your
 shells, so a workspace's `.vscode/settings.json` cannot set them.
@@ -206,6 +228,9 @@ All commands are in the "Terminal Grid" category of the Command Palette.
 | Open | Button in the Terminal panel title |
 | Show Grid or Go Back to the Editor | `⌃⌥⌘T` / Ctrl+Alt+Shift+T |
 | New Terminal | Panel title, `` Ctrl+Shift+` `` |
+| New Agent Session | Panel title, `⇧⌘T` / Ctrl+Shift+A in the grid |
+| New Agent Session in a Git Worktree | Panel title `...` menu |
+| Go to the Terminal Waiting for You | `⌃⌥⌘J` / Ctrl+Alt+Shift+J, the status bar item while one waits |
 | Arrange as Grid | Panel title |
 | Show Hidden Terminals | Panel title, while a mirror is hidden |
 | Open in Editor Tab | Panel title |
@@ -226,12 +251,15 @@ Editor-wide:
 |---|---|---|
 | Show the grid, or go back to the editor | `⌃⌥⌘T` | Ctrl+Alt+Shift+T |
 | New grid terminal (`terminalGrid.newTerminalShortcut`) | `` ⌃⇧` `` | `` Ctrl+Shift+` `` |
+| Go to the terminal waiting for you | `⌃⌥⌘J` | Ctrl+Alt+Shift+J |
 
 Inside the grid:
 
 | Action | macOS | Windows and Linux |
 |---|---|---|
 | New terminal | `⌘T` | Ctrl+Shift+T |
+| New agent session | `⇧⌘T` | Ctrl+Shift+A |
+| Previous or next command | `⌘↑` / `⌘↓` | Ctrl+↑ / Ctrl+↓ |
 | Split right | `⌘D` | Ctrl+Shift+D |
 | Split down | `⇧⌘D` | Ctrl+Shift+Alt+D |
 | Maximize or restore the tile | `⇧⌘↩` | Ctrl+Shift+Enter |
@@ -245,13 +273,15 @@ Inside the grid:
 - A mirror cannot resize the real terminal, so a wide and short panel
   terminal shows small text in a tile. Output written before the extension
   started is not in a mirror; it is still in the Terminal tab.
-- Grid shells run in the extension host. A window reload ends them: they are
-  started again with the last screen restored, but running programs are gone.
-  The editor's own terminals do not have this limitation.
-- The Terminal-tab side of a grid shell is an extension pseudoterminal, so
-  shell integration (command decorations, sticky scroll) is not available
-  there.
+- Grid shells outlive a reload only in a window with a folder or workspace
+  open (the pty host is found again by it) and not on Windows; elsewhere they
+  run in the extension host, and a reload starts them again with the last
+  screen restored but without the programs that were running.
+- Shell integration in grid shells covers zsh and bash started without custom
+  arguments, as in the editor's own terminals.
 - One grid per window.
+- Files can be dropped into the grid only with Shift held: the editor keeps
+  drops out of every webview otherwise.
 - The current folder of a grid shell is read with `lsof` on macOS and from
   `/proc` on Linux. On Windows it is not tracked, so a split opens in the
   folder the shell started in.
@@ -267,6 +297,10 @@ of scrollback of each grid shell are saved in the editor's workspace storage,
 so that they can be shown again after a reload. Anything printed in a grid
 terminal, secrets included, can end up there. With the setting off, no screen
 content is saved. Mirrors are never saved.
+
+The pty host keeps the shells' screens in memory only. It listens on a socket
+in a folder only your user can open, and it ends itself once its shells are
+gone, or a minute after the window closed.
 
 ## Development
 

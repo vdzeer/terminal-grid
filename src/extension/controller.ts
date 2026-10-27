@@ -7,12 +7,15 @@ import { remove, sanitize, type LayoutNode, type Placement } from '../shared/lay
 import type { HostMessage, ViewMessage, ViewSettings } from '../shared/protocol';
 import { buildEnv, defaultShellArgs, resolveShell } from './env';
 import { ancestorsOf } from './ancestry';
+import { droppedPaths, shellQuote } from './drop';
 import { FocusLayout } from './focusLayout';
 import { RECLAIM_WINDOW_MS, noReclaim, reclaimCause, tabChangeCounts, type ReclaimState } from './reclaim';
 import { renderHtml, renderPlaceholder } from './html';
-import type { NodePty } from './nodePty';
+import type { PtyBackend } from './ptyHostClient';
 import { Mirrors } from './mirrors';
 import { SessionManager, type Session, type ShellConfig } from './sessions';
+import { runtimeDir } from './runtimeDir';
+import { prepareZdotdir, withShellIntegration } from './shellIntegration';
 import { readState, STATE_KEY, type StoredTerminal } from './store';
 import { Twin } from './twins';
 
@@ -70,16 +73,20 @@ export class BoardController implements vscode.Disposable {
   private reclaim: ReclaimState = noReclaim();
   /** The last tab change, for the integration run's diagnostics. */
   private lastTabEvent = '';
+  /** The tile that last had the keyboard focus in the board. */
+  private focusedTile: string | undefined;
+  /** zsh startup files for shell integration, copied once per start from the editor install. */
+  private zdotdir: string | null | undefined;
   private readonly t: Translate;
   private readonly subscriptions: vscode.Disposable[] = [];
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    nodePty: NodePty,
+    private readonly backend: PtyBackend,
   ) {
     this.t = translator(languageFor(vscode.env.language));
     this.manager = new SessionManager(
-      nodePty,
+      backend,
       () => this.shellConfig(),
       {
         output: (chunks) => this.post({ type: 'output', chunks: chunks.filter(([id]) => !this.hidden.has(id)) }),
@@ -89,6 +96,7 @@ export class BoardController implements vscode.Disposable {
           this.twins.get(session.id)?.rename(titleOf(session));
         },
         exited: (session) => this.onExited(session),
+        activity: (session, kind) => this.onActivity(session, kind),
         spawnFailed: (session, message) => {
           this.manager.print(session.id, `\r\n\x1b[31m${this.t('spawnFailed', message)}\x1b[0m\r\n`);
           this.post({ type: 'updated', terminal: session.info() });
@@ -115,11 +123,15 @@ export class BoardController implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor) void this.focusLayout.leaveForEditor({ keepGrid: activeTabIsDiff() });
       }),
+      vscode.window.onDidOpenTerminal((terminal) => {
+        if (this.isTwin(terminal)) this.showTwinInGrid(terminal);
+      }),
       // Closing a twin in the Terminal tab (or through the API) ends the shell and the tile.
+      // A reload or a closing window closes it too: then the pty host keeps the shell for the next window.
       vscode.window.onDidCloseTerminal((terminal) => {
         const options = terminal.creationOptions;
-        if (!('pty' in options)) return;
-        for (const twin of this.twins.values()) if (twin === options.pty) twin.close();
+        if (!('pty' in options) || terminal.exitStatus?.reason === vscode.TerminalExitReason.Shutdown) return;
+        for (const [id, twin] of this.twins) if (twin === options.pty) this.removeSession(id);
       }),
       vscode.window.tabGroups.onDidChangeTabs((event) => {
         const now = Date.now();
@@ -404,6 +416,7 @@ export class BoardController implements vscode.Disposable {
         const session = this.manager.get(message.id);
         if (session?.kind === 'mirror') this.mirrors.terminalOf(message.id)?.sendText(message.data, false);
         else this.manager.write(message.id, message.data);
+        if (session) this.clearAttention(session);
         // Enter sends a prompt, and some agents show the terminal in answer (see reclaim.ts).
         if (session && message.data === '\r' && this.host === 'panel' && this.panelView?.visible) {
           this.reclaim = { ...this.reclaim, submitAt: Date.now(), submitId: session.id };
@@ -421,8 +434,14 @@ export class BoardController implements vscode.Disposable {
         this.manager.ack(message.id, message.chars);
         return;
       case 'create':
-        await this.createFromView(message.placement, message.cwdFrom);
+        await this.createFromView(message.placement, message.cwdFrom, message.agent);
         return;
+      case 'focused': {
+        this.focusedTile = message.id;
+        const session = this.manager.get(message.id);
+        if (session) this.clearAttention(session);
+        return;
+      }
       case 'close':
         await this.closeFromView(message.id);
         return;
@@ -448,6 +467,12 @@ export class BoardController implements vscode.Disposable {
       case 'openFile':
         await this.openFile(message.id, message.path, message.line, message.column);
         return;
+      case 'drop': {
+        if (!this.manager.get(message.id) || !Array.isArray(message.uris) || !Array.isArray(message.names)) return;
+        const paths = await droppedPaths(message.uris, message.names, process.platform);
+        if (paths.length > 0) this.post({ type: 'paste', id: message.id, text: paths.map((file) => shellQuote(file, process.platform)).join(' ') });
+        return;
+      }
       case 'viewport':
         if (this.host === 'panel') this.focusLayout.onViewport(message);
         return;
@@ -474,7 +499,6 @@ export class BoardController implements vscode.Disposable {
       screen: () => session.serialize(false),
       input: (data) => this.manager.write(session.id, data),
       resized: () => this.applySize(session),
-      closedByUser: () => this.removeSession(session.id),
     });
     this.twins.set(session.id, twin);
     return twin;
@@ -483,6 +507,22 @@ export class BoardController implements vscode.Disposable {
   private createTwin(session: Session): void {
     const twin = this.makeTwin(session);
     vscode.window.createTerminal({ name: titleOf(session), pty: twin, iconPath: new vscode.ThemeIcon('layout'), isTransient: true });
+  }
+
+  /**
+   * Tools give focus back with `activeTerminal.show()` (see reclaim.ts) at
+   * moments the grid cannot predict, such as the start of every turn of an AI
+   * agent, including turns the user did not start with Enter. The editor hands
+   * every extension the same terminal object, so a twin's `show` is ours to
+   * change: while the grid is on screen the twin is already in view there, and
+   * the board takes focus (on the tile last used) instead of the Terminal tab.
+   */
+  private showTwinInGrid(terminal: vscode.Terminal): void {
+    const show = terminal.show.bind(terminal);
+    terminal.show = (preserveFocus?: boolean) => {
+      if (this.host !== 'panel' || this.panelView?.visible !== true) return show(preserveFocus);
+      if (!preserveFocus) void vscode.commands.executeCommand(`${PANEL_VIEW_ID}.focus`);
+    };
   }
 
   /**
@@ -625,14 +665,62 @@ export class BoardController implements vscode.Disposable {
     if (this.boardWebview()) await this.sendInit();
   }
 
-  private async createFromView(placement: Placement | undefined, cwdFrom: string | undefined): Promise<void> {
+  private async createFromView(placement: Placement | undefined, cwdFrom: string | undefined, agent: 'plain' | 'worktree' | undefined): Promise<void> {
     let cwd = this.defaultCwd();
     const source = cwdFrom ? this.manager.get(cwdFrom) : undefined;
     if (source) {
       await this.manager.refreshCwd([source.id]);
       cwd = source.cwd;
     }
-    this.createSession({ cwd, focus: true, placement });
+    const session = this.createSession({ cwd, focus: true, placement });
+    if (agent === 'plain' || agent === 'worktree') this.startAgent(session, agent);
+  }
+
+  /** A new grid shell that starts the configured agent (`terminalGrid.agentCommand`). */
+  newAgent(mode: 'plain' | 'worktree'): void {
+    void this.open();
+    this.startAgent(this.createSession({ cwd: this.defaultCwd(), focus: true }), mode);
+  }
+
+  private startAgent(session: Session, mode: 'plain' | 'worktree'): void {
+    const command = vscode.workspace.getConfiguration('terminalGrid').get<string>('agentCommand', 'claude').trim();
+    if (!command) return;
+    this.manager.typeWhenReady(session.id, `${command}${mode === 'worktree' ? ' --worktree' : ''}\r`);
+  }
+
+  // ---- what the programs in the tiles are doing ----
+
+  /** The user sees this tile now: the grid is on screen, the tile has the focus and the window too. */
+  private looking(id: string): boolean {
+    return this.gridVisible() && this.focusedTile === id && vscode.window.state.focused;
+  }
+
+  private onActivity(session: Session, kind: 'working' | 'idle' | 'bell'): void {
+    if (kind === 'working') session.attention = false;
+    else if (!this.looking(session.id) && !this.hidden.has(session.id)) {
+      session.attention = true;
+      session.attentionAt = Date.now();
+    }
+    this.post({ type: 'updated', terminal: session.info() });
+    this.updateStatus();
+  }
+
+  private clearAttention(session: Session): void {
+    if (!session.attention) return;
+    session.attention = false;
+    this.post({ type: 'updated', terminal: session.info() });
+    this.updateStatus();
+  }
+
+  /** Shows the grid and focuses the terminal that has waited for the user the longest. */
+  async focusAttention(): Promise<void> {
+    const next = this.visibleSessions()
+      .filter((s) => s.attention)
+      .sort((a, b) => a.attentionAt - b.attentionAt)[0];
+    await this.open();
+    if (!next) return;
+    if (this.ready) this.post({ type: 'focus', id: next.id });
+    else this.focusAfterInit = next.id;
   }
 
   private async closeFromView(id: string): Promise<void> {
@@ -722,6 +810,14 @@ export class BoardController implements vscode.Disposable {
       appVersion: vscode.version,
       overrides,
     });
+    if (vscode.workspace.getConfiguration('terminal.integrated').get<boolean>('shellIntegration.enabled', true)) {
+      if (this.zdotdir === undefined) {
+        const dir = runtimeDir();
+        this.zdotdir = (dir && prepareZdotdir(vscode.env.appRoot, dir)) ?? null;
+      }
+      const launch = withShellIntegration(shell, args, env, vscode.env.appRoot, this.zdotdir ?? undefined);
+      if (launch) return { shell, ...launch };
+    }
     return { shell, args, env };
   }
 
@@ -803,23 +899,30 @@ export class BoardController implements vscode.Disposable {
   private ensureRestored(): void {
     if (this.restored) return;
     this.restored = true;
-    if (!vscode.workspace.getConfiguration('terminalGrid').get<boolean>('restoreSessions', true)) return;
-    const state = readState(this.context.workspaceState.get(STATE_KEY));
-    if (!state) return;
+    // Shells the pty host kept through the reload are taken back as they are, still running.
+    const survivors = this.backend.takeSurvivors();
+    const state = vscode.workspace.getConfiguration('terminalGrid').get<boolean>('restoreSessions', true)
+      ? readState(this.context.workspaceState.get(STATE_KEY))
+      : undefined;
     const note = `\r\n${RESET_MODES}\x1b[2m${this.t('historyRestored')}: ${new Date().toLocaleString()}\x1b[0m\r\n`;
-    for (const stored of state.terminals) {
-      this.manager.create({
-        id: stored.id,
-        cwd: stored.cwd || this.defaultCwd(),
-        customTitle: stored.customTitle,
-        history: stored.snapshot ? stored.snapshot + note : undefined,
-        cols: stored.cols,
-        rows: stored.rows,
-      });
-      const session = this.manager.get(stored.id);
-      if (session) this.createTwin(session);
+    for (const stored of state?.terminals ?? []) {
+      const survivor = survivors.get(stored.id);
+      survivors.delete(stored.id);
+      const session = survivor
+        ? this.manager.adopt({ id: stored.id, cwd: stored.cwd, customTitle: stored.customTitle, survivor })
+        : this.manager.create({
+            id: stored.id,
+            cwd: stored.cwd || this.defaultCwd(),
+            customTitle: stored.customTitle,
+            history: stored.snapshot ? stored.snapshot + note : undefined,
+            cols: stored.cols,
+            rows: stored.rows,
+          });
+      this.createTwin(session);
     }
-    this.layout = sanitize(state.layout, new Set(this.manager.all().map((s) => s.id)));
+    // Started too shortly before the reload to be saved, or saved with restoring turned off.
+    for (const [id, survivor] of survivors) this.createTwin(this.manager.adopt({ id, cwd: '', survivor }));
+    this.layout = sanitize(state?.layout ?? null, new Set(this.manager.all().map((s) => s.id)));
     this.updateStatus();
   }
 
@@ -851,13 +954,16 @@ export class BoardController implements vscode.Disposable {
   }
 
   private updateStatus(): void {
-    const count = this.visibleSessions().length;
-    if (count === 0) {
+    const sessions = this.visibleSessions();
+    if (sessions.length === 0) {
       this.status.hide();
       return;
     }
-    this.status.text = `$(layout) ${count}`;
-    this.status.tooltip = this.t('statusTooltip', count);
+    const waiting = sessions.filter((s) => s.attention).length;
+    this.status.text = waiting ? `$(layout) ${sessions.length}  $(bell-dot) ${waiting}` : `$(layout) ${sessions.length}`;
+    this.status.tooltip = this.t('statusTooltip', sessions.length) + (waiting ? `\n${this.t('statusWaitingCount', waiting)}` : '');
+    // With someone waiting, the click goes straight to them.
+    this.status.command = waiting ? 'terminalGrid.focusAttention' : 'terminalGrid.open';
     this.status.show();
   }
 
@@ -877,6 +983,8 @@ export class BoardController implements vscode.Disposable {
       twinTerminal: (id: string) => vscode.window.terminals.find((t) => 'pty' in t.creationOptions && t.creationOptions.pty === this.twins.get(id)),
       /** Same routing as typing in a tile. */
       input: (id: string, data: string) => this.onMessage({ type: 'input', id, data }),
+      /** As if the tile got the keyboard focus. */
+      focused: (id: string) => this.onMessage({ type: 'focused', id }),
       close: (id: string) => this.onMessage({ type: 'close', id }),
       /** "Close All Terminals" after its confirmation. */
       closeAll: () => this.closeAll(),
@@ -885,9 +993,17 @@ export class BoardController implements vscode.Disposable {
       mirrorsAvailable: () => this.mirrors.available,
       viewport: () => this.focusLayout.lastViewport,
       /** Saves, stops every shell and restores from the saved state, like a window reload. */
+      /** Whether grid shells run in the pty host and outlive a reload. */
+      persistent: () => this.backend.persistent,
+      /**
+       * Saves, lets go of every shell and takes them back like the window
+       * after a reload: from the pty host when it runs them, otherwise from
+       * the saved state with new shells.
+       */
       simulateReload: async () => {
         await this.save();
         for (const session of this.manager.all()) if (session.kind === 'pty') this.removeSessionKeepState(session.id);
+        await this.backend.reconnect();
         this.restored = false;
         this.layout = null;
         this.ensureRestored();
@@ -906,12 +1022,12 @@ export class BoardController implements vscode.Disposable {
     }
   }
 
-  /** Test helper: stops a shell and its twin without touching the saved state. */
+  /** Test helper: lets go of a shell and its twin without touching the saved state. */
   private removeSessionKeepState(id: string): void {
     const twin = this.twins.get(id);
     this.twins.delete(id);
     twin?.dispose();
-    this.manager.close(id);
+    this.manager.detach(id);
   }
 
   dispose(): void {
@@ -926,7 +1042,7 @@ export class BoardController implements vscode.Disposable {
 }
 
 function titleOf(session: Session): string {
-  return session.customTitle || session.processName || 'shell';
+  return session.customTitle || session.title || session.processName || 'shell';
 }
 
 function mirrorCwd(terminal: vscode.Terminal): string {

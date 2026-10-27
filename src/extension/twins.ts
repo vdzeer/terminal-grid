@@ -9,8 +9,6 @@ export interface TwinHooks {
   input(data: string): void;
   /** The Terminal-tab size changed (or became known). */
   resized(): void;
-  /** The user closed the terminal in the Terminal tab. */
-  closedByUser(): void;
 }
 
 export class Twin implements vscode.Pseudoterminal {
@@ -39,10 +37,9 @@ export class Twin implements vscode.Pseudoterminal {
     this.hooks.resized();
   }
 
+  /** The editor closed this side. Whether the shell ends too is decided on `onDidCloseTerminal`, which knows why. */
   close(): void {
-    if (this.closed) return;
     this.closed = true;
-    this.hooks.closedByUser();
   }
 
   handleInput(data: string): void {

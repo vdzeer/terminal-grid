@@ -8,6 +8,8 @@
 // grid while the user works in it. A switch that close to a tab change, or
 // right after Enter in a tile, is not the user's, so the grid takes the panel back.
 // A tab change and the hide can arrive in either order; whichever comes second decides.
+// A twin's own `show` no longer leaves the grid at all (`showTwinInGrid` in
+// controller.ts); this still covers mirrors, and editors where that cannot work.
 // Kept free of `vscode` so it can be unit tested.
 
 /** How far apart a tab change and the grid being hidden may be to count as one push. */

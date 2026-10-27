@@ -50,6 +50,13 @@ const en = {
   statusTooltip: 'Terminal Grid. Terminals: {0}',
   fileNotFound: 'File not found: {0}',
   spawnFailed: 'Could not start the shell: {0}',
+  newAgent: 'New agent',
+  newAgentHint: 'New terminal that starts the AI agent ({0})',
+  statusWorking: 'Working',
+  statusWaiting: 'Waiting for you',
+  statusWaitingCount: 'Waiting for you: {0}',
+  dropPath: 'Drop to insert the path',
+  dropHoldShift: 'Hold Shift to drop here',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -102,6 +109,13 @@ const uk: Record<MessageKey, string> = {
   statusTooltip: 'Terminal Grid. Терміналів: {0}',
   fileNotFound: 'Файл не знайдено: {0}',
   spawnFailed: 'Не вдалося запустити оболонку: {0}',
+  newAgent: 'Новий агент',
+  newAgentHint: 'Новий термінал, що запускає ШІ-агента ({0})',
+  statusWorking: 'Працює',
+  statusWaiting: 'Чекає на вас',
+  statusWaitingCount: 'Чекають на вас: {0}',
+  dropPath: 'Відпустіть, щоб вставити шлях',
+  dropHoldShift: 'Утримуйте Shift, щоб кинути сюди',
 };
 
 export const dictionaries: Record<Language, Record<MessageKey, string>> = { en, uk };

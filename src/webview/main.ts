@@ -80,6 +80,8 @@ class App implements TileHost {
   private readonly board: HTMLDivElement;
   private readonly newButton: HTMLButtonElement;
   private readonly arrangeButton: HTMLButtonElement;
+  private readonly agentButton: HTMLButtonElement;
+  private dropHintTimer: number | undefined;
   private readonly empty: HTMLDivElement;
   private readonly dropIndicator: HTMLDivElement;
   private readonly ghost: HTMLDivElement;
@@ -90,9 +92,10 @@ class App implements TileHost {
     const toolbar = el('div', 'toolbar');
     toolbar.hidden = HOST === 'panel';
     this.newButton = el('button', 'tool-button primary');
+    this.agentButton = el('button', 'tool-button');
     this.arrangeButton = el('button', 'tool-button');
     const spacer = el('div', 'spacer');
-    toolbar.append(this.newButton, this.arrangeButton, spacer);
+    toolbar.append(this.newButton, this.agentButton, this.arrangeButton, spacer);
 
     this.board = el('div', 'board');
     this.empty = el('div', 'empty');
@@ -102,7 +105,7 @@ class App implements TileHost {
     this.ghost = el('div', 'drag-ghost');
     this.ghost.hidden = true;
     root.append(toolbar, this.board, this.ghost);
-    for (const b of [this.newButton, this.arrangeButton]) b.type = 'button';
+    for (const b of [this.newButton, this.agentButton, this.arrangeButton]) b.type = 'button';
     this.renderTexts();
 
     this.newButton.addEventListener('pointerdown', (event) => {
@@ -112,7 +115,24 @@ class App implements TileHost {
       if (this.suppressClick) return;
       this.post({ type: 'create' });
     });
+    this.agentButton.addEventListener('click', () => this.post({ type: 'create', agent: 'plain' }));
     this.arrangeButton.addEventListener('click', () => this.arrange());
+    // Files dropped on a tile go in as their paths, as in the Terminal tab.
+    // The editor lets a drop into a webview through only while Shift is held.
+    this.board.addEventListener('dragenter', (event) => this.showFileDropHint(event));
+    this.board.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      this.showFileDropHint(event);
+    });
+    this.board.addEventListener('dragleave', (event) => {
+      if (!this.board.contains(event.relatedTarget as Node | null)) this.hideFileDropHint();
+    });
+    this.board.addEventListener('drop', (event) => {
+      this.hideFileDropHint();
+      this.onFileDrop(event);
+    });
     document.addEventListener('keydown', (event) => this.onDocumentKey(event));
     // Coming back to the tab focuses the webview itself; hand that on to the last terminal.
     window.addEventListener('focus', () => {
@@ -145,6 +165,8 @@ class App implements TileHost {
     const { t } = this;
     this.newButton.innerHTML = `${icons.plus}<span>${t('newTerminal')}</span>`;
     this.newButton.title = t('newTerminalHint', shortcutLabel('new', this.isMac));
+    this.agentButton.innerHTML = `${icons.sparkle}<span>${t('newAgent')}</span>`;
+    this.agentButton.title = t('newAgentHint', shortcutLabel('newAgent', this.isMac));
     this.arrangeButton.innerHTML = `${icons.grid}<span>${t('arrange')}</span>`;
     this.arrangeButton.title = t('arrange');
     this.empty.replaceChildren();
@@ -187,7 +209,49 @@ class App implements TileHost {
       case 'focus':
         this.focus(message.id);
         return;
+      case 'paste':
+        // `paste` brackets the text when the program asked for it, as a real paste does.
+        this.tiles.get(message.id)?.terminal.paste(message.text);
+        this.focus(message.id);
+        return;
     }
+  }
+
+  /**
+   * Over a tile: says where the paths go, or that Shift has to be held.
+   * Without Shift the editor stops passing the drag to the board at once, so
+   * the hint also goes away on its own.
+   */
+  private showFileDropHint(event: DragEvent): void {
+    const id = (event.target as Element | null)?.closest<HTMLElement>('.tile')?.dataset.id;
+    const rect = id ? this.rects.get(id) : undefined;
+    if (!rect) {
+      this.hideFileDropHint();
+      return;
+    }
+    const inset = 3;
+    place(this.dropIndicator, { x: rect.x + inset, y: rect.y + inset, w: rect.w - inset * 2, h: rect.h - inset * 2 });
+    this.dropIndicator.dataset.label = event.shiftKey ? this.t('dropPath') : this.t('dropHoldShift');
+    this.dropIndicator.hidden = false;
+    window.clearTimeout(this.dropHintTimer);
+    this.dropHintTimer = window.setTimeout(() => this.hideFileDropHint(), event.shiftKey ? 400 : 1500);
+  }
+
+  private hideFileDropHint(): void {
+    window.clearTimeout(this.dropHintTimer);
+    this.dropIndicator.hidden = true;
+  }
+
+  private onFileDrop(event: DragEvent): void {
+    const id = (event.target as Element | null)?.closest<HTMLElement>('.tile')?.dataset.id;
+    const data = event.dataTransfer;
+    if (!id || !data) return;
+    // The explorer gives URIs; Finder only file names, and the extension looks up their paths.
+    const uris = data.getData('text/uri-list').split(/\r?\n/).filter((line) => line && !line.startsWith('#'));
+    const names = [...data.files].map((file) => file.name);
+    if (uris.length === 0 && names.length === 0) return;
+    event.preventDefault();
+    this.post({ type: 'drop', id, uris, names });
   }
 
   private init(message: Extract<HostMessage, { type: 'init' }>): void {
@@ -289,6 +353,8 @@ class App implements TileHost {
   }
 
   onTileFocus(id: string): void {
+    // Every time, also when the window comes back: the extension clears "waiting for you" on it.
+    this.post({ type: 'focused', id });
     if (this.focusedId === id) return;
     this.focusedId = id;
     for (const [tid, tile] of this.tiles) tile.setFocused(tid === id);
@@ -316,6 +382,13 @@ class App implements TileHost {
     switch (shortcut) {
       case 'new':
         this.post({ type: 'create' });
+        return;
+      case 'newAgent':
+        this.post({ type: 'create', agent: 'plain' });
+        return;
+      case 'previousCommand':
+      case 'nextCommand':
+        this.tiles.get(id)?.scrollToCommand(shortcut === 'previousCommand' ? 'previous' : 'next');
         return;
       case 'splitRight':
         this.split(id, 'right');
@@ -350,10 +423,11 @@ class App implements TileHost {
     if (target?.closest('input, textarea')) return;
     const shortcut = matchShortcut(event, this.isMac);
     if (!shortcut) return;
-    if (shortcut === 'new' || this.focusedId) {
+    if (shortcut === 'new' || shortcut === 'newAgent' || this.focusedId) {
       event.preventDefault();
       event.stopPropagation();
       if (shortcut === 'new') this.post({ type: 'create' });
+      else if (shortcut === 'newAgent') this.post({ type: 'create', agent: 'plain' });
       else if (this.focusedId) this.runShortcut(this.focusedId, shortcut);
     }
   }

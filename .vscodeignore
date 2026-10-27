@@ -1,5 +1,6 @@
 **
 !dist/extension.js
+!dist/ptyHost.js
 !dist/webview.js
 !dist/webview.css
 !dist/xterm.css

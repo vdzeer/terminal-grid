@@ -18,6 +18,7 @@ export const icons = {
   arrowUp: svg('<path d="M8 13V3.5M4 7.5l4-4 4 4"/>'),
   arrowDown: svg('<path d="M8 3v9.5M4 8.5l4 4 4-4"/>'),
   mirror: svg('<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/>'),
+  sparkle: svg('<path d="M8 2.5 9.3 6.7 13.5 8 9.3 9.3 8 13.5 6.7 9.3 2.5 8 6.7 6.7Z"/>'),
   restart: svg('<path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/>'),
 };
 

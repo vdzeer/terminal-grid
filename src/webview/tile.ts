@@ -3,9 +3,9 @@ import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { Terminal, type ILink, type ITheme } from '@xterm/xterm';
+import { Terminal, type ILink, type IMarker, type ITheme } from '@xterm/xterm';
 import type { Translate } from '../shared/i18n';
-import { matchShortcut, shortcutLabel, type Shortcut } from '../shared/keys';
+import { matchShortcut, shortcutLabel, terminalSequence, type Shortcut } from '../shared/keys';
 import type { Edge } from '../shared/layout';
 import { findFileLinks } from '../shared/links';
 import type { TerminalInfo, ViewMessage, ViewSettings } from '../shared/protocol';
@@ -52,6 +52,7 @@ export class Tile {
   private readonly search = new SearchAddon({ highlightLimit: 2000 });
   private webgl: WebglAddon | undefined;
   private readonly header: HTMLDivElement;
+  private readonly statusEl: HTMLSpanElement;
   private readonly titleEl: HTMLSpanElement;
   private readonly cwdEl: HTMLSpanElement;
   private readonly zoomButton: HTMLButtonElement;
@@ -72,6 +73,8 @@ export class Tile {
   private disposed = false;
   /** A mirror shows a Terminal-tab terminal at that terminal's size; its text scales instead of reflowing. */
   private readonly mirror: boolean;
+  /** Prompts that shell integration marked, oldest first, and how far their command got. */
+  private readonly commands: { marker: IMarker; state: 'prompt' | 'running' | 'done' }[] = [];
 
   constructor(
     info: TerminalInfo,
@@ -93,6 +96,8 @@ export class Tile {
     const icon = document.createElement('span');
     icon.className = 'tile-icon';
     icon.innerHTML = icons.terminal;
+    this.statusEl = document.createElement('span');
+    this.statusEl.hidden = true;
     this.titleEl = document.createElement('span');
     this.titleEl.className = 'tile-title';
     this.titleEl.title = t('renameHint');
@@ -105,7 +110,7 @@ export class Tile {
     this.zoomButton = button('maximize', t('maximize', shortcutLabel('zoom', isMac)));
     const close = button('close', this.mirror ? t('hideMirror') : t('close'));
     actions.append(splitRight, splitDown, this.zoomButton, close);
-    this.header.append(icon, this.titleEl, this.cwdEl);
+    this.header.append(icon, this.statusEl, this.titleEl, this.cwdEl);
     if (this.mirror) {
       const badge = document.createElement('span');
       badge.className = 'tile-badge';
@@ -173,6 +178,8 @@ export class Tile {
     this.terminal.registerLinkProvider({ provideLinks: (y, callback) => callback(this.fileLinks(y)) });
 
     this.terminal.onData((data) => this.host.post({ type: 'input', id: this.info.id, data }));
+    // Shell integration (OSC 633, the editor's own scripts) marks each prompt and the exit code of its command.
+    this.terminal.parser.registerOscHandler(633, (data) => this.onShellMark(data));
     this.terminal.attachCustomKeyEventHandler((event) => this.onKey(event));
 
     // Header interactions.
@@ -228,7 +235,7 @@ export class Tile {
   }
 
   get title(): string {
-    return this.info.customTitle || this.info.process || 'shell';
+    return this.info.customTitle || this.info.title || this.info.process || 'shell';
   }
 
   /** Opens xterm once the tile is in the document and has a size. */
@@ -302,6 +309,11 @@ export class Tile {
     this.titleEl.textContent = this.title;
     this.cwdEl.textContent = this.info.cwd ? basename(this.info.cwd) : '';
     this.cwdEl.title = this.info.cwd;
+    const status = this.info.attention ? 'attention' : this.info.working ? 'working' : '';
+    this.statusEl.className = `tile-status ${status}`;
+    this.statusEl.hidden = !status;
+    this.statusEl.title = status === 'attention' ? t('statusWaiting') : status === 'working' ? t('statusWorking') : '';
+    this.element.classList.toggle('attention', status === 'attention');
     const exited = this.info.exitCode !== undefined;
     this.element.classList.toggle('exited', exited);
     this.exitBar.hidden = !exited;
@@ -443,6 +455,15 @@ export class Tile {
       // Also swallow the keypress, or xterm would send a plain Enter after it.
       return false;
     }
+    const sequence = terminalSequence(event, this.host.isMac);
+    if (sequence) {
+      if (event.type === 'keydown') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.host.post({ type: 'input', id: this.info.id, data: sequence });
+      }
+      return false;
+    }
     if (event.type !== 'keydown') return true;
     const shortcut = matchShortcut(event, this.host.isMac);
     if (!shortcut) return true;
@@ -455,6 +476,40 @@ export class Tile {
 
   clear(): void {
     this.terminal.clear();
+  }
+
+  // ---- shell integration ----
+
+  private onShellMark(data: string): boolean {
+    const [kind, exitCode] = data.split(';');
+    const last = this.commands[this.commands.length - 1];
+    if (kind === 'A') {
+      // A prompt drawn again (or left empty) ran nothing: only the new one counts.
+      if (last?.state === 'prompt') this.commands.pop()?.marker.dispose();
+      // Lines that left the history took their markers with them.
+      while (this.commands[0]?.marker.isDisposed) this.commands.shift();
+      const marker = this.terminal.registerMarker(0);
+      if (marker) this.commands.push({ marker, state: 'prompt' });
+    } else if (kind === 'C' && last) {
+      last.state = 'running';
+    } else if (kind === 'D' && last?.state === 'running') {
+      last.state = 'done';
+      if (exitCode === undefined) return true;
+      this.terminal
+        .registerDecoration({ marker: last.marker })
+        ?.onRender((el) => el.classList.add('command-mark', exitCode === '0' ? 'ok' : 'failed'));
+    }
+    return true;
+  }
+
+  /** Scrolls to the prompt before or after the one at the top (or, at the bottom, the cursor's). */
+  scrollToCommand(direction: 'previous' | 'next'): void {
+    const buffer = this.terminal.buffer.active;
+    const anchor = buffer.viewportY === buffer.baseY ? buffer.baseY + buffer.cursorY : buffer.viewportY;
+    const lines = this.commands.filter((c) => !c.marker.isDisposed).map((c) => c.marker.line);
+    const target = direction === 'previous' ? lines.filter((line) => line < anchor).pop() : lines.find((line) => line > buffer.viewportY);
+    if (target !== undefined) this.terminal.scrollToLine(target);
+    else if (direction === 'next') this.terminal.scrollToBottom();
   }
 
   // ---- search ----

@@ -13,7 +13,6 @@ await esbuild.build({
   platform: 'node',
   format: 'esm',
   target: 'node20',
-  packages: 'external',
   logLevel: 'warning',
 });
 const outputs = (await readdir('.test-out')).filter((f) => f.endsWith('.test.mjs')).map((f) => `.test-out/${f}`);

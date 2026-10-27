@@ -17,5 +17,9 @@
   "command.showHidden": "Show Hidden Terminals",
   "config.mirrorTerminals": "Show terminals that were opened outside the grid (in the Terminal tab or by other extensions) as tiles. Needs `enable-proposed-api` for this extension in the editor's argv.json.",
   "config.shiftEnterSequence": "What Shift+Enter sends in grid terminals. The default, ESC followed by Enter (the same as Alt+Enter), is what many command line programs read as a new line instead of sending the input. Empty sends a plain Enter.",
-  "command.makeDefaultProfile": "Make Default Terminal Profile"
+  "command.makeDefaultProfile": "Make Default Terminal Profile",
+  "command.newAgent": "New Agent Session",
+  "command.newAgentWorktree": "New Agent Session in a Git Worktree",
+  "command.focusAttention": "Go to the Terminal Waiting for You",
+  "config.agentCommand": "Command that **New Agent Session** types into a new grid terminal, such as `claude`. **New Agent Session in a Git Worktree** adds `--worktree`, which Claude Code understands. User or remote settings only."
 }

@@ -25,6 +25,14 @@ const builds = [
   },
   {
     ...common,
+    entryPoints: ['src/ptyHost/main.ts'],
+    outfile: 'dist/ptyHost.js',
+    platform: 'node',
+    format: 'cjs',
+    target: 'node20',
+  },
+  {
+    ...common,
     entryPoints: ['src/webview/main.ts'],
     outfile: 'dist/webview.js',
     platform: 'browser',

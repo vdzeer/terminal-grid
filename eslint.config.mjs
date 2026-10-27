@@ -7,7 +7,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/extension/**/*.ts', 'test/**/*.ts', 'scripts/**/*.mjs', '*.mjs'],
+    files: ['src/extension/**/*.ts', 'src/ptyHost/**/*.ts', 'test/**/*.ts', 'scripts/**/*.mjs', '*.mjs'],
     languageOptions: { globals: globals.node },
   },
   {

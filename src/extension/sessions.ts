@@ -4,13 +4,16 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Snapshot, TerminalInfo } from '../shared/protocol';
+import { readTitle } from './agentTitle';
 import { cwdOf } from './cwd';
 import { hasChildProcess, processLabel } from './env';
-import type { NodePty, Pty } from './nodePty';
+import type { Pty } from './nodePty';
+import type { PtyBackend, Survivor } from './ptyHostClient';
 
-// A grid terminal is either a node-pty process owned by the extension host
-// ("pty"), or a mirror of a Terminal-tab terminal the extension did not start
-// ("mirror"), fed with that terminal's output. Either way the output also goes
+// A grid terminal is either a shell the extension started ("pty", run by the
+// pty host or in the extension host, see ptyHostClient.ts), or a mirror of a
+// Terminal-tab terminal the extension did not start ("mirror"), fed with that
+// terminal's output. Either way the output also goes
 // into a headless xterm, so the screen can be repainted when the webview is
 // recreated, and saved for the next window reload.
 
@@ -24,6 +27,9 @@ const POLL_MS = 1500;
 /** Lines kept when a snapshot is saved for the next window reload. */
 const PERSIST_LINES = 1000;
 const PERSIST_MAX_CHARS = 400_000;
+/** A command for a new shell is typed once the shell has been quiet this long after its first output. */
+const PROMPT_QUIET_MS = 300;
+const PROMPT_WAIT_MS = 5000;
 
 export interface ShellConfig {
   shell: string;
@@ -39,12 +45,21 @@ export interface SessionEvents {
   changed(session: Session): void;
   exited(session: Session): void;
   spawnFailed(session: Session, message: string): void;
+  /** The program started or stopped working (from its title), or rang the bell. */
+  activity(session: Session, kind: 'working' | 'idle' | 'bell'): void;
 }
 
 export class Session {
   pty: Pty | undefined;
   processName = '';
   customTitle = '';
+  /** Title set by the program in the foreground, without its status mark. */
+  title = '';
+  /** The program's title says it is working. */
+  working = false;
+  /** It stopped working or rang while the user was looking elsewhere; cleared once they come back. */
+  attention = false;
+  attentionAt = 0;
   exitCode: number | undefined;
   cols = 80;
   rows = 24;
@@ -56,6 +71,8 @@ export class Session {
   shell = '';
   /** Size the grid tile wants; the pty follows it while the grid is visible. */
   gridSize: { cols: number; rows: number } | undefined;
+  /** Called after every chunk of pty output (see `typeWhenReady`). */
+  afterOutput: (() => void) | undefined;
   readonly headless: HeadlessTerminal;
   private readonly serializer = new SerializeAddon();
 
@@ -79,6 +96,9 @@ export class Session {
       id: this.id,
       process: this.processName,
       customTitle: this.customTitle,
+      ...(this.title ? { title: this.title } : {}),
+      ...(this.working ? { working: true } : {}),
+      ...(this.attention ? { attention: true } : {}),
       cwd: this.cwd,
       kind: this.kind,
       ...(this.kind === 'mirror' ? { fixedSize: { cols: this.cols, rows: this.rows } } : {}),
@@ -113,6 +133,12 @@ export class Session {
     }
     this.headless.dispose();
   }
+
+  /** Stops following the shell without ending it: the pty host keeps it. */
+  release(): void {
+    this.pty = undefined;
+    this.headless.dispose();
+  }
 }
 
 export class SessionManager {
@@ -126,7 +152,7 @@ export class SessionManager {
   private holding = false;
 
   constructor(
-    private readonly nodePty: NodePty,
+    private readonly backend: PtyBackend,
     private readonly shellConfig: () => ShellConfig,
     private readonly events: SessionEvents,
     private readonly scrollback: () => number,
@@ -150,7 +176,24 @@ export class SessionManager {
     session.customTitle = options.customTitle ?? '';
     if (options.history) session.headless.write(options.history);
     this.sessions.set(id, session);
+    this.watch(session);
     this.spawn(session);
+    this.ensurePolling();
+    return session;
+  }
+
+  /** A shell the pty host kept through a reload: the process runs on, its screen comes back as it was. */
+  adopt(options: { id: string; cwd: string; customTitle?: string; survivor: Survivor }): Session {
+    const { survivor } = options;
+    const session = new Session(options.id, options.cwd || homedir(), this.scrollback(), survivor.cols, survivor.rows);
+    session.customTitle = options.customTitle ?? '';
+    session.shell = this.shellConfig().shell;
+    this.sessions.set(session.id, session);
+    this.watch(session);
+    this.bind(session, survivor.pty);
+    session.headless.write(survivor.screen);
+    // The title is not part of the screen; set it again so the tile shows it.
+    if (survivor.title) session.headless.write(`\x1b]0;${survivor.title}\x07`);
     this.ensurePolling();
     return session;
   }
@@ -160,6 +203,7 @@ export class SessionManager {
     const session = new Session(options.id, options.cwd, this.scrollback(), options.cols, options.rows, 'mirror');
     session.processName = options.name;
     this.sessions.set(session.id, session);
+    this.watch(session);
     return session;
   }
 
@@ -171,40 +215,102 @@ export class SessionManager {
     this.queue(id, data);
   }
 
+  /** What the program says about itself: its title, and the bell. */
+  private watch(session: Session): void {
+    session.headless.onTitleChange((raw) => {
+      // The title can come before the next poll notices the program that set it.
+      const moved = session.kind === 'pty' && this.updateProcess(session);
+      const { label, working } = readTitle(raw);
+      // A shell's own title (often its folder) would hide the process name: only programs it runs count.
+      const title = session.kind === 'pty' && !session.busy ? '' : label;
+      if (title !== session.title || moved) {
+        session.title = title;
+        this.events.changed(session);
+      }
+      if (working !== undefined && working !== session.working) {
+        session.working = working;
+        this.events.activity(session, working ? 'working' : 'idle');
+      }
+    });
+    session.headless.onBell(() => this.events.activity(session, 'bell'));
+  }
+
+  /** Reads the foreground process. Back at the shell, the program's title and status go with it. */
+  private updateProcess(session: Session): boolean {
+    if (!session.pty) return false;
+    let foreground: string;
+    try {
+      foreground = session.pty.process;
+    } catch {
+      return false;
+    }
+    const name = processLabel(foreground, session.shell);
+    if (name === session.processName) return false;
+    session.processName = name;
+    if (!hasChildProcess(foreground, session.shell)) {
+      session.title = '';
+      session.working = false;
+    }
+    return true;
+  }
+
   private spawn(session: Session): void {
     const config = this.shellConfig();
     session.shell = config.shell;
     session.exitCode = undefined;
     try {
-      const pty = this.nodePty.spawn(config.shell, config.args, {
-        name: 'xterm-256color',
-        cols: session.cols,
-        rows: session.rows,
-        cwd: usableDir(session.cwd),
-        env: config.env,
-      });
-      session.pty = pty;
-      session.processName = processLabel(pty.process, config.shell);
-      pty.onData((data) => {
-        if (session.pty !== pty) return;
-        session.headless.write(data);
-        session.dirty = true;
-        this.events.data(session, data);
-        this.queue(session.id, data);
-      });
-      pty.onExit(({ exitCode }) => {
-        if (session.pty !== pty) return;
-        this.flush();
-        session.pty = undefined;
-        session.paused = false;
-        session.exitCode = exitCode;
-        this.events.exited(session);
-      });
+      const pty = this.backend.spawn(
+        session.id,
+        config.shell,
+        config.args,
+        { name: 'xterm-256color', cols: session.cols, rows: session.rows, cwd: usableDir(session.cwd), env: config.env },
+        this.scrollback(),
+      );
+      this.bind(session, pty);
     } catch (error) {
       session.pty = undefined;
       session.exitCode = -1;
       this.events.spawnFailed(session, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private bind(session: Session, pty: Pty): void {
+    session.pty = pty;
+    session.processName = processLabel(pty.process, session.shell);
+    pty.onData((data) => {
+      if (session.pty !== pty) return;
+      session.headless.write(data);
+      session.dirty = true;
+      this.events.data(session, data);
+      this.queue(session.id, data);
+      session.afterOutput?.();
+    });
+    pty.onExit(({ exitCode }) => {
+      if (session.pty !== pty) return;
+      this.flush();
+      session.pty = undefined;
+      session.paused = false;
+      session.exitCode = exitCode;
+      this.events.exited(session);
+    });
+  }
+
+  /** Types a command into a new shell once it has drawn its prompt: some output, then a quiet spell. */
+  typeWhenReady(id: string, text: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    let quiet: NodeJS.Timeout | undefined;
+    const type = () => {
+      clearTimeout(quiet);
+      clearTimeout(fallback);
+      session.afterOutput = undefined;
+      this.write(id, text);
+    };
+    const fallback = setTimeout(type, PROMPT_WAIT_MS);
+    session.afterOutput = () => {
+      clearTimeout(quiet);
+      quiet = setTimeout(type, PROMPT_QUIET_MS);
+    };
   }
 
   /** Writes text into the terminal display only (not to the shell). */
@@ -266,6 +372,20 @@ export class SessionManager {
     this.pending.delete(id);
     session.dispose();
     if (this.sessions.size === 0) this.stopPolling();
+  }
+
+  /** Lets go of a shell without ending it, where the backend can keep it (a reload). */
+  detach(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    this.sessions.delete(id);
+    this.pending.delete(id);
+    if (this.backend.persistent && session.kind === 'pty') {
+      this.backend.detach(id);
+      session.release();
+    } else {
+      session.dispose();
+    }
   }
 
   /** Whether a webview is listening. Without one, output is only recorded. */
@@ -344,7 +464,8 @@ export class SessionManager {
 
   /** Re-reads the working directory of the given terminals right now. */
   async refreshCwd(ids: string[]): Promise<void> {
-    const live = ids.map((id) => this.sessions.get(id)).filter((s): s is Session => !!s?.pty);
+    // A shell the pty host has not reported a pid for yet is skipped.
+    const live = ids.map((id) => this.sessions.get(id)).filter((s): s is Session => !!s?.pty && s.pty.pid > 0);
     const cwds = await cwdOf(live.map((s) => s.pty?.pid ?? -1));
     for (const session of live) {
       const cwd = session.pty ? cwds.get(session.pty.pid) : undefined;
@@ -373,26 +494,22 @@ export class SessionManager {
         session.unacked = 0;
         session.pty.resume();
       }
-      let name: string;
-      try {
-        name = processLabel(session.pty.process, session.shell);
-      } catch {
-        continue;
-      }
-      if (name !== session.processName) {
-        session.processName = name;
-        this.events.changed(session);
-      }
+      if (this.updateProcess(session)) this.events.changed(session);
     }
     if (this.pollTick % 2 === 0) await this.refreshCwd([...this.sessions.keys()]);
   }
 
+  /** The extension host is going away: the pty host keeps its shells for the next window, others end. */
   dispose(): void {
     this.stopPolling();
     if (this.flushTimer) clearTimeout(this.flushTimer);
-    for (const session of this.sessions.values()) session.dispose();
+    for (const session of this.sessions.values()) {
+      if (this.backend.persistent && session.kind === 'pty') session.release();
+      else session.dispose();
+    }
     this.sessions.clear();
     this.pending.clear();
+    this.backend.release();
   }
 }
 

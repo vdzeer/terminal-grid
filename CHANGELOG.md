@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.0
+
+- Grid shells survive a window reload. They run in a small background process
+  (the pty host), one per workspace; programs keep running through the
+  reload, and the grid takes them back with everything they printed
+  meanwhile. After the window closes, the pty host waits a minute for it
+  before it ends the shells.
+- Tiles take the title their program sets, and show what an AI agent is
+  doing: a spinner while it works, a mark once it waits for you while you
+  look elsewhere. "Go to the Terminal Waiting for You" (`⌃⌥⌘J`) and the status
+  bar item go there.
+- "New Agent Session" (also in a git worktree) opens a grid shell running
+  `terminalGrid.agentCommand`, `claude` by default.
+- Shell integration in grid shells (zsh and bash, the editor's own scripts):
+  command marks in the gutter, `⌘↑`/`⌘↓` to jump between commands.
+- Dragging a file over a tile says where its path goes, or that Shift has to
+  be held.
+- A tool showing a grid shell's terminal no longer switches the panel to the
+  Terminal tab while the grid is on screen: the grid stays and takes focus.
+  Before, the grid was only taken back after a tab change or Enter in a tile,
+  so turns an AI agent started on its own (queued prompts, finished
+  background tasks) still pushed it out.
+- Line editing keys send what the Terminal tab sends: `⌘⌫` deletes to the
+  start of the line, `⌘←`/`⌘→` go to its start and end, `⌥⌫`/`⌥⌦` delete a
+  word, `⌥←`/`⌥→` move by word (Ctrl+Backspace and Ctrl+Delete on Windows
+  and Linux).
+- Files dropped on a tile go in as their paths, quoted for the shell. The
+  editor lets a drop into the grid through only while Shift is held.
+
 ## 0.4.0
 
 - New command for other extensions, `terminalGrid.revealProcess` (not in the

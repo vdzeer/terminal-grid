@@ -2,7 +2,7 @@
   "name": "terminal-grid",
   "displayName": "Terminal Grid",
   "description": "All terminals of the window as a grid in a bottom-panel tab. Split, resize and rearrange them with drag and drop.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "vdzeer",
   "private": true,
   "license": "MIT",
@@ -67,6 +67,22 @@
         "icon": "$(add)"
       },
       {
+        "command": "terminalGrid.newAgent",
+        "title": "%command.newAgent%",
+        "category": "Terminal Grid",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "terminalGrid.newAgentWorktree",
+        "title": "%command.newAgentWorktree%",
+        "category": "Terminal Grid"
+      },
+      {
+        "command": "terminalGrid.focusAttention",
+        "title": "%command.focusAttention%",
+        "category": "Terminal Grid"
+      },
+      {
         "command": "terminalGrid.arrange",
         "title": "%command.arrange%",
         "category": "Terminal Grid",
@@ -128,19 +144,29 @@
           "group": "navigation@1"
         },
         {
-          "command": "terminalGrid.arrange",
+          "command": "terminalGrid.newAgent",
           "when": "view == terminalGrid.view",
           "group": "navigation@2"
         },
         {
+          "command": "terminalGrid.arrange",
+          "when": "view == terminalGrid.view",
+          "group": "navigation@3"
+        },
+        {
           "command": "terminalGrid.showHidden",
           "when": "view == terminalGrid.view && terminalGrid.hasHidden",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "terminalGrid.openInEditor",
           "when": "view == terminalGrid.view",
-          "group": "navigation@4"
+          "group": "navigation@5"
+        },
+        {
+          "command": "terminalGrid.newAgentWorktree",
+          "when": "view == terminalGrid.view",
+          "group": "agent@1"
         },
         {
           "command": "terminalGrid.killAll",
@@ -173,6 +199,11 @@
         "command": "terminalGrid.newTerminal",
         "key": "ctrl+shift+`",
         "when": "config.terminalGrid.newTerminalShortcut"
+      },
+      {
+        "command": "terminalGrid.focusAttention",
+        "key": "ctrl+alt+shift+j",
+        "mac": "ctrl+alt+cmd+j"
       }
     ],
     "configuration": {
@@ -215,6 +246,12 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%config.mirrorTerminals%"
+        },
+        "terminalGrid.agentCommand": {
+          "type": "string",
+          "default": "claude",
+          "scope": "machine",
+          "markdownDescription": "%config.agentCommand%"
         },
         "terminalGrid.shiftEnterSequence": {
           "type": "string",
